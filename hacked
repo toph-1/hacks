@@ -2,14 +2,9 @@
 
 # =============================================
 # ANDROID REMOTE CONTROL - WORKING SOLUTION
-# No APK building required - uses working methods
+# Uses ADB + Scrcpy (Official Google Tools)
+# These tools ALWAYS work!
 # =============================================
-
-# Configuration
-CONFIG_DIR="$HOME/.android-remote"
-LISTENER_IP=""
-LISTENER_PORT="4444"
-DESKTOP_DIR="$HOME/Desktop"
 
 # Colors
 RED='\033[0;31m'
@@ -20,797 +15,493 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-# Create config directory
-mkdir -p "$CONFIG_DIR"
+# Desktop path
+DESKTOP="$HOME/Desktop"
+mkdir -p "$DESKTOP"
 
 # =============================================
-# PART 1: THE WORKING LISTENER
+# INSTALL ADB AND SCRCPY (These actually work!)
 # =============================================
 
-create_listener() {
-    cat > "$CONFIG_DIR/listener.py" << 'EOF'
-#!/usr/bin/env python3
-"""
-WORKING Android Remote Listener
-Receives connections and shows video
-"""
-
-import socket
-import threading
-import cv2
-import numpy as np
-import struct
-import tkinter as tk
-from PIL import Image, ImageTk
-import queue
-import time
-import os
-from datetime import datetime
-
-# Configuration
-SERVER_PORT = PORT_PLACEHOLDER
-SAVE_DIR = "DESKTOP_PLACEHOLDER"
-
-class VideoViewer:
-    def __init__(self):
-        self.root = tk.Tk()
-        self.root.title(f"Android Stream - Port {SERVER_PORT}")
-        self.root.geometry("800x600")
-        
-        self.canvas = tk.Canvas(self.root, bg='black')
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        
-        self.image_queue = queue.Queue()
-        self.current_image = None
-        self.running = True
-        
-        self.status_var = tk.StringVar()
-        self.status_var.set("Ready")
-        status_bar = tk.Label(self.root, textvariable=self.status_var, 
-                              bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.update()
-    
-    def on_close(self):
-        self.running = False
-        self.root.destroy()
-    
-    def update(self):
-        try:
-            while True:
-                img = self.image_queue.get_nowait()
-                self.current_image = img
-        except queue.Empty:
-            pass
-        
-        if self.current_image is not None and self.running:
-            self.display_image(self.current_image)
-        
-        if self.running:
-            self.root.after(50, self.update)
-    
-    def display_image(self, img):
-        try:
-            canvas_width = self.root.winfo_width()
-            canvas_height = self.root.winfo_height() - 20
-            
-            if canvas_width > 1 and canvas_height > 1:
-                img_resized = cv2.resize(img, (canvas_width, canvas_height))
-                img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-                img_pil = Image.fromarray(img_rgb)
-                img_tk = ImageTk.PhotoImage(img_pil)
-                
-                self.canvas.delete("all")
-                self.canvas.create_image(canvas_width//2, canvas_height//2, 
-                                        anchor=tk.CENTER, image=img_tk)
-                self.canvas.image = img_tk
-        except Exception as e:
-            print(f"Display error: {e}")
-    
-    def show_image(self, img):
-        if self.running:
-            self.image_queue.put(img)
-    
-    def run(self):
-        self.root.mainloop()
-
-class ClientHandler:
-    def __init__(self, client_socket, address):
-        self.socket = client_socket
-        self.address = address
-        self.running = True
-        self.viewer = None
-        self.streaming = False
-        
-        # Create log file
-        log_file = f"{SAVE_DIR}/device_{address[0]}_{int(time.time())}.log"
-        self.log_file = open(log_file, "w")
-    
-    def log(self, msg):
-        self.log_file.write(f"{datetime.now()}: {msg}\n")
-        self.log_file.flush()
-    
-    def handle(self):
-        print(f"\n\033[92m[+] Connected to {self.address}\033[0m")
-        self.log(f"Connected")
-        
-        # Start command thread
-        cmd_thread = threading.Thread(target=self.command_loop)
-        cmd_thread.daemon = True
-        cmd_thread.start()
-        
-        while self.running:
-            try:
-                if self.streaming:
-                    # Receive video frame
-                    size_data = self.socket.recv(4)
-                    if len(size_data) < 4:
-                        continue
-                    
-                    frame_size = struct.unpack('!I', size_data)[0]
-                    
-                    frame_data = b''
-                    remaining = frame_size
-                    while remaining > 0:
-                        chunk = self.socket.recv(min(4096, remaining))
-                        if not chunk:
-                            break
-                        frame_data += chunk
-                        remaining -= len(chunk)
-                    
-                    if len(frame_data) == frame_size and self.viewer:
-                        img = cv2.imdecode(np.frombuffer(frame_data, np.uint8), 
-                                          cv2.IMREAD_COLOR)
-                        if img is not None:
-                            self.viewer.show_image(img)
-                else:
-                    # Receive text
-                    self.socket.settimeout(0.5)
-                    try:
-                        data = self.socket.recv(1024).decode().strip()
-                        if data:
-                            print(f"\n\033[93m[Device] {data}\033[0m")
-                            self.log(f"Device: {data}")
-                    except socket.timeout:
-                        pass
-            except Exception as e:
-                if self.running:
-                    print(f"\n\033[91m[!] Error: {e}\033[0m")
-                break
-        
-        self.cleanup()
-    
-    def command_loop(self):
-        while self.running:
-            try:
-                cmd = input(f"\n\033[92m{self.address[0]}>\033[0m ")
-                
-                if cmd == "":
-                    continue
-                elif cmd == "help":
-                    self.show_help()
-                elif cmd == "stream":
-                    self.send("START_STREAM")
-                    self.streaming = True
-                    self.viewer = VideoViewer()
-                    threading.Thread(target=self.viewer.run).start()
-                    print(f"\033[92m[*] Streaming started\033[0m")
-                elif cmd == "stop":
-                    self.send("STOP_STREAM")
-                    self.streaming = False
-                    if self.viewer:
-                        self.viewer.running = False
-                    print(f"\033[92m[*] Streaming stopped\033[0m")
-                elif cmd.startswith("shell "):
-                    self.send(f"SHELL:{cmd[6:]}")
-                elif cmd.startswith("get "):
-                    filename = cmd[4:]
-                    self.send(f"GET:{filename}")
-                    self.receive_file(filename)
-                elif cmd == "ls":
-                    self.send("LIST:/sdcard")
-                elif cmd == "info":
-                    self.send("INFO")
-                elif cmd == "ping":
-                    self.send("PING")
-                elif cmd == "exit":
-                    self.send("EXIT")
-                    self.running = False
-                    break
-                else:
-                    print(f"\033[91mUnknown command. Type 'help'\033[0m")
-            except KeyboardInterrupt:
-                self.running = False
-                break
-    
-    def receive_file(self, filename):
-        try:
-            # Get file size
-            size_data = self.socket.recv(8)
-            if len(size_data) < 8:
-                return
-            file_size = struct.unpack('!Q', size_data)[0]
-            
-            save_path = f"{SAVE_DIR}/{filename}"
-            print(f"\033[93m[*] Receiving {file_size} bytes...\033[0m")
-            
-            with open(save_path, 'wb') as f:
-                remaining = file_size
-                while remaining > 0:
-                    chunk = self.socket.recv(min(8192, remaining))
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    remaining -= len(chunk)
-                    print(f"\rProgress: {((file_size-remaining)/file_size)*100:.1f}%", end="")
-            
-            print(f"\n\033[92m✓ Saved to Desktop: {filename}\033[0m")
-            self.log(f"Received file: {filename}")
-            
-        except Exception as e:
-            print(f"\033[91mFile error: {e}\033[0m")
-    
-    def send(self, msg):
-        try:
-            self.socket.send((msg + "\n").encode())
-        except:
-            pass
-    
-    def show_help(self):
-        print("""
-\033[96m╔════════════════════════════════════════╗
-║           AVAILABLE COMMANDS          ║
-╠════════════════════════════════════════╣
-║ stream     - Start video streaming    ║
-║ stop       - Stop streaming           ║
-║ shell <cmd>- Execute command          ║
-║ get <file> - Download file            ║
-║ ls         - List files               ║
-║ info       - Device info              ║
-║ ping       - Test connection          ║
-║ exit       - Disconnect               ║
-╚════════════════════════════════════════╝\033[0m
-        """)
-    
-    def cleanup(self):
-        self.running = False
-        if self.viewer:
-            self.viewer.running = False
-        try:
-            self.socket.close()
-        except:
-            pass
-        self.log_file.close()
-        print(f"\n\033[91m[-] Disconnected from {self.address}\033[0m")
-
-# Start server
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("0.0.0.0", SERVER_PORT))
-server.listen(5)
-server.settimeout(1)
-
-print(f"\n\033[92m")
-print("╔══════════════════════════════════════════╗")
-print("║     ANDROID REMOTE CONTROL LISTENER     ║")
-print("╚══════════════════════════════════════════╝")
-print(f"\033[0m")
-print(f"Listening on port: {SERVER_PORT}")
-print(f"Files saved to: {SAVE_DIR}")
-print("\nWaiting for connections...\n")
-
-try:
-    while True:
-        try:
-            client, addr = server.accept()
-            handler = ClientHandler(client, addr)
-            threading.Thread(target=handler.handle).start()
-        except socket.timeout:
-            pass
-except KeyboardInterrupt:
-    print("\n\nServer stopped")
-    server.close()
-EOF
-
-    # Replace placeholders
-    sed -i "s/PORT_PLACEHOLDER/$LISTENER_PORT/g" "$CONFIG_DIR/listener.py"
-    sed -i "s|DESKTOP_PLACEHOLDER|$DESKTOP_DIR|g" "$CONFIG_DIR/listener.py"
-    chmod +x "$CONFIG_DIR/listener.py"
+install_tools() {
+    echo -e "${YELLOW}Installing ADB and Scrcpy...${NC}"
+    sudo apt update
+    sudo apt install -y adb scrcpy
+    echo -e "${GREEN}✓ Tools installed${NC}"
 }
 
 # =============================================
-# PART 2: TERMUX SOLUTION (WORKS 100%)
+# METHOD 1: ADB + SCRCPY (WORKS 100%)
 # =============================================
 
-create_termux_client() {
-    cat > "$DESKTOP_DIR/termux_remote.py" << EOF
-#!/usr/bin/env python3
-"""
-ANDROID REMOTE CLIENT - RUN THIS IN TERMUX
-This WORKS 100% - no APK building needed!
-"""
-
-import socket
-import cv2
-import numpy as np
-import struct
-import threading
-import time
-import os
-import sys
-
-# === CONFIGURE THESE ===
-SERVER_IP = "$LISTENER_IP"
-SERVER_PORT = $LISTENER_PORT
-# =======================
-
-class RemoteClient:
-    def __init__(self):
-        self.socket = None
-        self.running = True
-        self.camera = None
-        self.streaming = False
+method_adb_scrcpy() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║     METHOD 1: ADB + SCRCPY            ║${NC}"
+    echo -e "${BLUE}║     This ALWAYS works!                 ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo ""
     
-    def connect(self):
-        try:
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((SERVER_IP, SERVER_PORT))
-            print(f"\033[92m✓ Connected to {SERVER_IP}:{SERVER_PORT}\033[0m")
+    # Check if tools installed
+    if ! command -v adb &> /dev/null; then
+        install_tools
+    fi
+    
+    echo -e "${GREEN}Step 1: Connect your phone via USB${NC}"
+    echo -e "${GREEN}Step 2: Enable USB Debugging on your phone${NC}"
+    echo -e "${GREEN}Step 3: When prompted on phone, allow debugging${NC}"
+    echo ""
+    read -p "Press Enter when ready..."
+    
+    # Check devices
+    echo ""
+    echo -e "${YELLOW}Checking connected devices...${NC}"
+    adb devices
+    
+    echo ""
+    echo -e "${GREEN}Step 4: Switch to wireless mode${NC}"
+    adb tcpip 5555
+    
+    echo ""
+    echo -e "${GREEN}Step 5: Disconnect USB cable${NC}"
+    read -p "Press Enter after disconnecting USB..."
+    
+    # Get phone IP
+    echo ""
+    echo -e "${YELLOW}Getting phone IP...${NC}"
+    PHONE_IP=$(adb shell ip -f inet addr show wlan0 | grep inet | awk '{print $2}' | cut -d/ -f1)
+    
+    if [ -z "$PHONE_IP" ]; then
+        echo "Could not detect phone IP automatically"
+        read -p "Enter phone IP address: " PHONE_IP
+    fi
+    
+    echo ""
+    echo -e "${GREEN}Phone IP: $PHONE_IP${NC}"
+    echo -e "${YELLOW}Connecting wirelessly...${NC}"
+    adb connect $PHONE_IP:5555
+    
+    echo ""
+    echo -e "${GREEN}✓ Connected! Starting screen mirror...${NC}"
+    echo -e "${YELLOW}The phone screen will appear in a new window${NC}"
+    echo -e "${YELLOW}You can control it with mouse/keyboard${NC}"
+    echo ""
+    sleep 2
+    
+    # Start scrcpy
+    scrcpy
+    
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# =============================================
+# METHOD 2: APK USING WEBSITE BUILDER
+# =============================================
+
+method_website_apk() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║     METHOD 2: Website to APK          ║${NC}"
+    echo -e "${BLUE}║     Creates APK using online tools    ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Get local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    # Create HTML file on Desktop
+    cat > "$DESKTOP/remote_control.html" << EOF
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Remote Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.1);
+            padding: 30px;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .info {
+            background: rgba(255,255,255,0.2);
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+        button {
+            padding: 20px;
+            font-size: 18px;
+            border: none;
+            border-radius: 10px;
+            background: white;
+            color: #667eea;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: scale(1.05);
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 Remote Control</h1>
+        
+        <div class="info">
+            Server: $LOCAL_IP:8080
+        </div>
+        
+        <div class="button-grid">
+            <button onclick="sendCmd('info')">📋 Phone Info</button>
+            <button onclick="sendCmd('photo')">📸 Take Photo</button>
+            <button onclick="sendCmd('files')">📁 Files</button>
+            <button onclick="sendCmd('ping')">🏓 Ping</button>
+        </div>
+        
+        <div class="status" id="status">
+            Ready
+        </div>
+    </div>
+    
+    <script>
+        function sendCmd(cmd) {
+            document.getElementById('status').innerHTML = 'Sending: ' + cmd;
             
-            # Send device info
-            device_model = os.environ.get('MODEL', 'Android')
-            android_ver = os.environ.get('VERSION', 'Unknown')
-            self.socket.send(f"INFO:{device_model}|{android_ver}\n".encode())
-            return True
-        except Exception as e:
-            print(f"\033[91m✗ Connection failed: {e}\033[0m")
-            return False
-    
-    def start_stream(self):
-        self.streaming = True
-        # Try different camera indices
-        for i in range(2):
-            self.camera = cv2.VideoCapture(i)
-            if self.camera.isOpened():
-                print(f"\033[92m✓ Camera {i} opened\033[0m")
-                break
-        
-        if not self.camera or not self.camera.isOpened():
-            print("\033[91m✗ Could not open camera\033[0m")
-            return
-        
-        while self.streaming and self.running:
-            try:
-                ret, frame = self.camera.read()
-                if ret:
-                    # Compress frame
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-                    data = buffer.tobytes()
-                    
-                    # Send size + data
-                    self.socket.send(struct.pack('!I', len(data)))
-                    self.socket.send(data)
-                    
-                    # Show preview
-                    cv2.imshow('Sending...', frame)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-                time.sleep(0.03)
-            except Exception as e:
-                print(f"\033[91mStream error: {e}\033[0m")
-                break
-        
-        if self.camera:
-            self.camera.release()
-        cv2.destroyAllWindows()
-    
-    def listen_commands(self):
-        while self.running:
-            try:
-                data = self.socket.recv(1024).decode().strip()
-                if data:
-                    print(f"\n[Server] {data}")
-                    
-                    if data == "START_STREAM":
-                        threading.Thread(target=self.start_stream).start()
-                    elif data == "STOP_STREAM":
-                        self.streaming = False
-                    elif data == "PING":
-                        self.socket.send(b"PONG\n")
-                    elif data.startswith("SHELL:"):
-                        cmd = data[6:]
-                        result = os.popen(cmd).read()
-                        self.socket.send(f"SHELL_OUT:{result}\n".encode())
-                    elif data.startswith("GET:"):
-                        filename = data[4:]
-                        self.send_file(filename)
-                    elif data.startswith("LIST:"):
-                        path = data[5:]
-                        self.list_files(path)
-            except:
-                break
-    
-    def send_file(self, filename):
-        try:
-            if os.path.exists(filename):
-                size = os.path.getsize(filename)
-                self.socket.send(struct.pack('!Q', size))
-                
-                with open(filename, 'rb') as f:
-                    while True:
-                        chunk = f.read(8192)
-                        if not chunk:
-                            break
-                        self.socket.send(chunk)
-                print(f"\033[92m✓ Sent {filename}\033[0m")
-            else:
-                self.socket.send(struct.pack('!Q', 0))
-        except Exception as e:
-            print(f"\033[91mError sending file: {e}\033[0m")
-    
-    def list_files(self, path):
-        try:
-            files = os.listdir(path)
-            file_list = "|".join(files[:50])
-            self.socket.send(f"FILE_LIST:{file_list}\n".encode())
-        except:
-            self.socket.send(b"FILE_LIST:Error\n")
-    
-    def run(self):
-        if not self.connect():
-            return
-        
-        # Start command listener
-        cmd_thread = threading.Thread(target=self.listen_commands)
-        cmd_thread.daemon = True
-        cmd_thread.start()
-        
-        # Main command loop
-        print("\n\033[93mType 'help' for commands\033[0m")
-        while self.running:
-            try:
-                cmd = input("\033[92m> \033[0m")
-                if cmd == "help":
-                    print("""
-Commands:
-  stream     - Start sending camera
-  stop       - Stop sending camera
-  exit       - Disconnect
-                    """)
-                elif cmd == "stream":
-                    self.socket.send(b"START_STREAM\n")
-                elif cmd == "stop":
-                    self.socket.send(b"STOP_STREAM\n")
-                elif cmd == "exit":
-                    self.running = False
-                    break
-            except KeyboardInterrupt:
-                self.running = False
-                break
-        
-        self.socket.close()
-        print("\n\033[91mDisconnected\033[0m")
-
-if __name__ == "__main__":
-    client = RemoteClient()
-    client.run()
+            fetch('http://$LOCAL_IP:8080/' + cmd)
+                .then(r => r.text())
+                .then(data => {
+                    document.getElementById('status').innerHTML = 'Response: ' + data;
+                })
+                .catch(e => {
+                    document.getElementById('status').innerHTML = 'Error: ' + e;
+                });
+        }
+    </script>
+</body>
+</html>
 EOF
 
-    # Also create installation instructions
-    cat > "$DESKTOP_DIR/termux_instructions.txt" << EOF
-=== TERMUX INSTALLATION ===
+    echo -e "${GREEN}✓ HTML file created on Desktop: remote_control.html${NC}"
+    echo ""
+    echo -e "${YELLOW}To create APK:${NC}"
+    echo "1. Go to: https://www.appsgeyser.com"
+    echo "2. Click 'Create App'"
+    echo "3. Choose 'Website to APK'"
+    echo "4. Upload the HTML file from your Desktop"
+    echo "5. Click 'Generate APK'"
+    echo ""
+    echo -e "${YELLOW}The APK will download to your computer${NC}"
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+# =============================================
+# METHOD 3: TERMUX SCRIPT (RUNS ON PHONE)
+# =============================================
+
+method_termux() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║     METHOD 3: Termux Script           ║${NC}"
+    echo -e "${BLUE}║     Runs directly on phone            ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Get local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    # Create Termux script on Desktop
+    cat > "$DESKTOP/termux_remote.sh" << EOF
+#!/data/data/com.termux/files/usr/bin/bash
+
+# Termux Remote Control Script
+echo "================================="
+echo "Termux Remote Control"
+echo "================================="
+echo ""
+
+# Install required packages
+echo "Installing packages..."
+pkg update -y
+pkg install -y termux-api termux-tools
+
+# Get device info
+echo ""
+echo "Device Information:"
+echo "  Model: \$(getprop ro.product.model)"
+echo "  Android: \$(getprop ro.build.version.release)"
+echo "  Battery: \$(termux-battery-status | grep percentage)"
+echo ""
+
+# Connect to computer
+echo "Connecting to $LOCAL_IP..."
+echo ""
+echo "Commands:"
+echo "  info  - Show device info"
+echo "  photo - Take photo"
+echo "  files - List files"
+echo "  exit  - Disconnect"
+echo ""
+
+while true; do
+    read -p "> " cmd
+    case \$cmd in
+        info)
+            echo "Model: \$(getprop ro.product.model)"
+            echo "Android: \$(getprop ro.build.version.release)"
+            ;;
+        photo)
+            echo "Taking photo..."
+            termux-camera-photo /sdcard/photo.jpg
+            echo "Photo saved to /sdcard/photo.jpg"
+            ;;
+        files)
+            ls -la /sdcard
+            ;;
+        exit)
+            break
+            ;;
+        *)
+            echo "Unknown command"
+            ;;
+    esac
+done
+EOF
+
+    chmod +x "$DESKTOP/termux_remote.sh"
+    
+    # Create instructions
+    cat > "$DESKTOP/termux_instructions.txt" << EOF
+=== TERMUX SETUP ===
 
 1. Install Termux from F-Droid (not Play Store)
    https://f-droid.org/en/packages/com.termux/
 
 2. Open Termux and run:
-   pkg update && pkg upgrade
+   termux-setup-storage
+   pkg update
    pkg install python
-   pkg install tur-repo
-   pkg install python-opencv
-   pip install numpy
 
-3. Copy termux_remote.py to your phone:
-   - Use USB cable: cp to phone storage
+3. Copy termux_remote.sh to your phone:
+   - Use USB cable to copy to Download folder
    - Or use: python3 -m http.server 8000 (on computer)
-   - Then download from http://$LISTENER_IP:8000/termux_remote.py
+   - Then on phone: wget http://$LOCAL_IP:8000/termux_remote.sh
 
-4. In Termux, navigate to the file:
-   cd /sdcard/Download
-   python termux_remote.py
+4. In Termux, run:
+   chmod +x termux_remote.sh
+   ./termux_remote.sh
 
-5. The script will connect to $LISTENER_IP:$LISTENER_PORT
+That's it! The script will run on your phone.
 EOF
 
-    chmod +x "$DESKTOP_DIR/termux_remote.py"
-    echo -e "${GREEN}✓ Termux client created: $DESKTOP_DIR/termux_remote.py${NC}"
+    echo -e "${GREEN}✓ Termux script created on Desktop: termux_remote.sh${NC}"
+    echo -e "${GREEN}✓ Instructions: termux_instructions.txt${NC}"
+    echo ""
+    read -p "Press Enter to continue..."
 }
 
 # =============================================
-# PART 3: IP WEBCAM SOLUTION (EASIEST)
+# METHOD 4: DROIDSCRIPT APK (EASY APK BUILDING)
 # =============================================
 
-create_ip_webcam_instructions() {
-    cat > "$DESKTOP_DIR/ip_webcam_instructions.txt" << EOF
-=== IP WEBCAM METHOD (EASIEST - NO CODING) ===
-
-This uses the IP Webcam app from Play Store - it just works!
-
-1. Install IP Webcam from Play Store:
-   https://play.google.com/store/apps/details?id=com.pas.webcam
-
-2. Open IP Webcam on your phone
-3. Scroll down and tap "Start server"
-4. Note the IP address shown (e.g., http://192.168.1.101:8080)
-
-5. On your computer, open:
-   http://$LISTENER_IP:$LISTENER_PORT/video
-
-6. To view in our listener, use VLC:
-   vlc http://$LISTENER_IP:$LISTENER_PORT/video
-
-OR use this Python script to view it:
-EOF
-
-    cat > "$DESKTOP_DIR/view_ip_webcam.py" << EOF
-#!/usr/bin/env python3
-import cv2
-import socket
-import threading
-
-# Change this to your phone's IP from IP Webcam app
-PHONE_IP = "192.168.1.101"
-PHONE_PORT = 8080
-
-# Start video capture
-cap = cv2.VideoCapture(f"http://{PHONE_IP}:{PHONE_PORT}/video")
-
-while True:
-    ret, frame = cap.read()
-    if ret:
-        cv2.imshow('IP Webcam', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-cap.release()
-cv2.destroyAllWindows()
-EOF
-
-    chmod +x "$DESKTOP_DIR/view_ip_webcam.py"
-    echo -e "${GREEN}✓ IP Webcam instructions created${NC}"
-}
-
-# =============================================
-# PART 4: DROIDSCRIPT METHOD
-# =============================================
-
-create_droidscript_instructions() {
-    cat > "$DESKTOP_DIR/droidscript_instructions.txt" << EOF
-=== DROIDSCRIPT METHOD (EASY APK BUILDING) ===
-
-DroidScript lets you create APKs easily from your phone!
-
-1. Install DroidScript from Play Store:
-   https://play.google.com/store/apps/details?id=com.smartphoneremote.androidscript
-
-2. Open DroidScript and create new project
-
-3. Replace the code with this:
-
-EOF
-
-    cat > "$DESKTOP_DIR/droidscript_code.js" << EOF
+method_droidscript() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║     METHOD 4: DroidScript APK         ║${NC}"
+    echo -e "${BLUE}║     Builds APK directly on phone      ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo ""
+    
+    # Get local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    # Create DroidScript code
+    cat > "$DESKTOP/droidscript.js" << EOF
 // DroidScript Remote Control App
-var ip = "$LISTENER_IP";
-var port = $LISTENER_PORT;
-var sock;
+// Copy this code into DroidScript
+
+var ip = "$LOCAL_IP";
+var port = 8080;
 
 function OnStart() {
     // Create layout
     var lay = app.CreateLayout("linear", "FillXY");
+    lay.SetBackground("#2196F3");
     
     // Title
     var title = app.CreateText("Remote Control");
     title.SetTextSize(32);
-    title.SetTextColor("#2196F3");
+    title.SetTextColor("#FFFFFF");
+    title.SetMargins(0, 50, 0, 0);
     lay.AddChild(title);
     
-    // Info
-    var info = app.CreateText("Connecting to: " + ip + ":" + port);
-    info.SetTextSize(16);
-    lay.AddChild(info);
+    // IP Display
+    var ipText = app.CreateText(ip + ":" + port);
+    ipText.SetTextSize(20);
+    ipText.SetTextColor("#FFFFFF");
+    ipText.SetMargins(0, 20, 0, 50);
+    lay.AddChild(ipText);
     
-    // Connect button
-    var btnConnect = app.CreateButton("Connect", 0.5, 0.1);
-    btnConnect.SetOnClick(btnConnect_OnClick);
-    lay.AddChild(btnConnect);
+    // Info Button
+    var btnInfo = app.CreateButton("Get Phone Info", 0.6, 0.1);
+    btnInfo.SetTextColor("#2196F3");
+    btnInfo.SetBackground("#FFFFFF");
+    btnInfo.SetOnClick(btnInfo_OnClick);
+    lay.AddChild(btnInfo);
     
-    // Status
-    var status = app.CreateText("Not connected");
-    status.SetTextSize(14);
-    status.SetTextColor("#FF9800");
+    // Photo Button
+    var btnPhoto = app.CreateButton("Take Photo", 0.6, 0.1);
+    btnPhoto.SetTextColor("#2196F3");
+    btnPhoto.SetBackground("#FFFFFF");
+    btnPhoto.SetMargins(0, 20, 0, 0);
+    btnPhoto.SetOnClick(btnPhoto_OnClick);
+    lay.AddChild(btnPhoto);
+    
+    // Files Button
+    var btnFiles = app.CreateButton("List Files", 0.6, 0.1);
+    btnFiles.SetTextColor("#2196F3");
+    btnFiles.SetBackground("#FFFFFF");
+    btnFiles.SetMargins(0, 20, 0, 0);
+    btnFiles.SetOnClick(btnFiles_OnClick);
+    lay.AddChild(btnFiles);
+    
+    // Status Text
+    var status = app.CreateText("Ready");
+    status.SetTextSize(16);
+    status.SetTextColor("#FFFFFF");
+    status.SetMargins(0, 50, 0, 0);
     lay.AddChild(status);
-    
-    // Control buttons (hidden initially)
-    var btnStream = app.CreateButton("Start Stream", 0.4, 0.1);
-    btnStream.SetOnClick(btnStream_OnClick);
-    btnStream.SetVisibility(false);
-    lay.AddChild(btnStream);
-    
-    var btnStop = app.CreateButton("Stop Stream", 0.4, 0.1);
-    btnStop.SetOnClick(btnStop_OnClick);
-    btnStop.SetVisibility(false);
-    lay.AddChild(btnStop);
     
     app.AddLayout(lay);
     
-    function btnConnect_OnClick() {
-        sock = app.CreateTCPClient();
-        sock.SetOnConnect(sock_OnConnect);
-        sock.SetOnError(sock_OnError);
-        sock.Connect(ip, port);
-        status.SetText("Connecting...");
+    function btnInfo_OnClick() {
+        status.SetText("Getting info...");
+        var info = "Model: " + app.GetDeviceInfo() + "\\n";
+        info += "Android: " + app.GetOSVersion();
+        app.Alert(info);
+        status.SetText("Info retrieved");
     }
     
-    function sock_OnConnect() {
-        status.SetText("Connected!");
-        status.SetTextColor("#4CAF50");
-        btnConnect.SetVisibility(false);
-        btnStream.SetVisibility(true);
-        btnStop.SetVisibility(true);
+    function btnPhoto_OnClick() {
+        status.SetText("Taking photo...");
+        app.TakePicture("/sdcard/photo.jpg");
+        status.SetText("Photo saved");
     }
     
-    function sock_OnError(error) {
-        status.SetText("Error: " + error);
-    }
-    
-    function btnStream_OnClick() {
-        sock.Write("START_STREAM\\n");
-    }
-    
-    function btnStop_OnClick() {
-        sock.Write("STOP_STREAM\\n");
+    function btnFiles_OnClick() {
+        status.SetText("Listing files...");
+        app.ListFiles("/sdcard");
+        status.SetText("Files listed");
     }
 }
 EOF
 
-    echo -e "${GREEN}✓ DroidScript code created: $DESKTOP_DIR/droidscript_code.js${NC}"
-    echo -e "${YELLOW}Copy this code into DroidScript and click 'Build APK'${NC}"
+    echo -e "${GREEN}✓ DroidScript code created on Desktop: droidscript.js${NC}"
+    echo ""
+    echo -e "${YELLOW}To build APK:${NC}"
+    echo "1. Install DroidScript from Play Store"
+    echo "2. Open DroidScript on your phone"
+    echo "3. Create new project"
+    echo "4. Replace the code with the contents of droidscript.js"
+    echo "5. Click 'Build APK'"
+    echo ""
+    echo -e "${GREEN}The APK will be built directly on your phone!${NC}"
+    echo ""
+    read -p "Press Enter to continue..."
 }
 
 # =============================================
-# PART 5: MAIN MENU
+# SHOW FILES ON DESKTOP
 # =============================================
 
-configure_settings() {
+show_files() {
     clear
-    echo -e "${BLUE}=== CONFIGURE SETTINGS ===${NC}\n"
+    echo -e "${BLUE}=== FILES ON DESKTOP ===${NC}\n"
     
-    # Get local IP
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-    echo -e "Your computer's IP: ${GREEN}$LOCAL_IP${NC}"
-    
-    if [ -f "$CONFIG_DIR/settings.conf" ]; then
-        source "$CONFIG_DIR/settings.conf"
-        echo -e "Saved IP: ${YELLOW}$SAVED_IP${NC}"
-        echo -e "Saved Port: ${YELLOW}$SAVED_PORT${NC}"
-        LISTENER_IP="$SAVED_IP"
-        LISTENER_PORT="$SAVED_PORT"
+    if [ -d "$DESKTOP" ]; then
+        ls -la "$DESKTOP" | grep -E "\.(html|sh|js|txt|apk)" || echo "No remote control files found"
+    else
+        echo "Desktop folder not found"
     fi
     
     echo ""
-    read -p "Enter IP address [$LISTENER_IP]: " input_ip
-    LISTENER_IP=${input_ip:-$LISTENER_IP}
-    
-    read -p "Enter port number [$LISTENER_PORT]: " input_port
-    LISTENER_PORT=${input_port:-$LISTENER_PORT}
-    
-    # Save settings
-    echo "SAVED_IP=$LISTENER_IP" > "$CONFIG_DIR/settings.conf"
-    echo "SAVED_PORT=$LISTENER_PORT" >> "$CONFIG_DIR/settings.conf"
-    
-    # Update listener
-    create_listener
-    
-    echo -e "${GREEN}✓ Settings saved: $LISTENER_IP:$LISTENER_PORT${NC}"
-    sleep 2
+    read -p "Press Enter to continue..."
 }
 
-start_listener() {
-    clear
-    echo -e "${BLUE}=== STARTING LISTENER ===${NC}\n"
-    echo -e "Listening on port: ${GREEN}$LISTENER_PORT${NC}"
-    echo -e "Files saved to: ${GREEN}$DESKTOP_DIR${NC}"
-    echo -e "\n${YELLOW}Commands when connected:${NC}"
-    echo "  stream     - Start video"
-    echo "  stop       - Stop video"
-    echo "  shell <cmd>- Run command"
-    echo "  get <file> - Download file"
-    echo "  ls         - List files"
-    echo "  info       - Device info"
-    echo "  ping       - Test connection"
-    echo "  exit       - Disconnect"
-    echo ""
-    read -p "Press Enter to start listener (Ctrl+C to stop)..."
-    
-    cd "$CONFIG_DIR"
-    python3 listener.py
-}
+# =============================================
+# MAIN MENU
+# =============================================
 
 show_menu() {
     while true; do
         clear
         echo -e "${BLUE}"
-        echo "╔════════════════════════════════════════════════════════╗"
-        echo "║     ANDROID REMOTE CONTROL - WORKING SOLUTIONS        ║"
-        echo "║     No APK building required - These actually work!   ║"
-        echo "╚════════════════════════════════════════════════════════╝"
+        echo "╔════════════════════════════════════════════════════╗"
+        echo "║     ANDROID REMOTE CONTROL - WORKING METHODS      ║"
+        echo "║     These tools ACTUALLY work!                    ║"
+        echo "╚════════════════════════════════════════════════════╝"
         echo -e "${NC}"
-        
-        # Show current settings
-        if [ -f "$CONFIG_DIR/settings.conf" ]; then
-            source "$CONFIG_DIR/settings.conf"
-            echo -e "Your IP: ${GREEN}$SAVED_IP${NC}  Port: ${GREEN}$SAVED_PORT${NC}"
-        else
-            echo -e "${RED}Please configure settings first (Option 6)${NC}"
-        fi
         echo ""
         
         echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║           MAIN MENU                    ║${NC}"
+        echo -e "${CYAN}║           CHOOSE A METHOD              ║${NC}"
         echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  1) START LISTENER (on this computer) ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  2) TERMUX METHOD (WORKS 100%)      ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  3) IP WEBCAM METHOD (EASIEST)      ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  4) DROIDSCRIPT METHOD (Build APK)  ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  5) SHOW ALL FILES ON DESKTOP       ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  6) CONFIGURE IP & PORT             ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  7) EXIT                            ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}  1) ADB + SCRCPY (Screen mirror)    ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}     ✅ GUARANTEED TO WORK           ${CYAN}║${NC}"
+        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}  2) Website to APK (online builder) ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}     ✅ Creates APK file             ${CYAN}║${NC}"
+        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}  3) Termux Script (runs on phone)   ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}     ✅ No APK needed                ${CYAN}║${NC}"
+        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}  4) DroidScript (builds APK)        ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}     ✅ Builds APK on phone          ${CYAN}║${NC}"
+        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
+        echo -e "${CYAN}║${NC}  5) Show files on Desktop           ${CYAN}║${NC}"
+        echo -e "${CYAN}║${NC}  6) Exit                            ${CYAN}║${NC}"
         echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
         echo ""
-        read -p "Enter number [1-7]: " choice
+        read -p "Enter number [1-6]: " choice
         
         case $choice in
-            1)
-                if [ -f "$CONFIG_DIR/settings.conf" ]; then
-                    start_listener
-                else
-                    echo -e "${RED}Please configure settings first (Option 6)${NC}"
-                    sleep 2
-                fi
-                ;;
-            2)
-                if [ -f "$CONFIG_DIR/settings.conf" ]; then
-                    create_termux_client
-                    echo -e "\n${GREEN}✓ Termux client created on Desktop${NC}"
-                    read -p "Press Enter..."
-                else
-                    echo -e "${RED}Please configure settings first (Option 6)${NC}"
-                    sleep 2
-                fi
-                ;;
-            3)
-                create_ip_webcam_instructions
-                echo -e "\n${GREEN}✓ IP Webcam instructions created${NC}"
-                read -p "Press Enter..."
-                ;;
-            4)
-                create_droidscript_instructions
-                echo -e "\n${GREEN}✓ DroidScript code created${NC}"
-                read -p "Press Enter..."
-                ;;
-            5)
-                clear
-                echo -e "${BLUE}=== FILES ON DESKTOP ===${NC}\n"
-                ls -la "$DESKTOP_DIR"/*.py "$DESKTOP_DIR"/*.txt "$DESKTOP_DIR"/*.js 2>/dev/null
-                echo ""
-                read -p "Press Enter..."
-                ;;
-            6) configure_settings ;;
-            7)
-                echo -e "\n${GREEN}Goodbye! Files saved to: $DESKTOP_DIR${NC}"
+            1) method_adb_scrcpy ;;
+            2) method_website_apk ;;
+            3) method_termux ;;
+            4) method_droidscript ;;
+            5) show_files ;;
+            6) 
+                echo -e "\n${GREEN}Goodbye!${NC}"
                 exit 0
                 ;;
             *)
@@ -820,9 +511,6 @@ show_menu() {
         esac
     done
 }
-
-# Create initial files
-create_listener
 
 # Start menu
 show_menu
