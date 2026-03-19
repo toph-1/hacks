@@ -1,42 +1,400 @@
 #!/bin/bash
 
 # =============================================
-# Simple Android Remote Access Setup
-# Usage: ./setup-remote.sh <YOUR_IP> <PORT>
+# Android Remote Access Control Center
+# A menu-driven tool for Android remote control
 # =============================================
 
-LISTENER_IP="$1"
-LISTENER_PORT="$2"
+# Configuration
+CONFIG_DIR="$HOME/.android-remote"
+LISTENER_IP=""
+LISTENER_PORT="5555"
+LOG_FILE="$CONFIG_DIR/remote.log"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-# Check arguments
-if [ $# -ne 2 ]; then
-    echo -e "${RED}Usage: $0 <YOUR_IP> <PORT>${NC}"
-    echo "Example: $0 192.168.1.100 4444"
-    exit 1
-fi
+# Create config directory
+mkdir -p "$CONFIG_DIR"
 
-echo -e "${BLUE}"
-echo "╔════════════════════════════════════════════╗"
-echo "║     Simple Android Remote Access Setup    ║"
-echo "╚════════════════════════════════════════════╝"
-echo -e "${NC}"
+# Function to show header
+show_header() {
+    clear
+    echo -e "${BLUE}"
+    echo "╔════════════════════════════════════════════════════════╗"
+    echo "║     📱 ANDROID REMOTE ACCESS CONTROL CENTER v1.0      ║"
+    echo "╚════════════════════════════════════════════════════════╝"
+    echo -e "${NC}"
+}
 
-# Install required tools
-echo -e "${YELLOW}[1/4] Installing required tools...${NC}"
-sudo apt update -y
-sudo apt install -y adb scrcpy python3 python3-pip
-pip3 install --user numpy opencv-python pillow
+# Function to check dependencies
+check_dependencies() {
+    echo -e "${YELLOW}[*] Checking dependencies...${NC}"
+    
+    MISSING=()
+    
+    # Check ADB
+    if ! command -v adb &> /dev/null; then
+        MISSING+=("adb")
+    fi
+    
+    # Check scrcpy
+    if ! command -v scrcpy &> /dev/null; then
+        MISSING+=("scrcpy")
+    fi
+    
+    # Check Python3
+    if ! command -v python3 &> /dev/null; then
+        MISSING+=("python3")
+    fi
+    
+    # Install missing dependencies
+    if [ ${#MISSING[@]} -gt 0 ]; then
+        echo -e "${YELLOW}[!] Missing dependencies: ${MISSING[*]}${NC}"
+        read -p "Install now? (y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            sudo apt update
+            sudo apt install -y adb scrcpy python3 python3-pip
+            pip3 install --user numpy opencv-python pillow
+        fi
+    else
+        echo -e "${GREEN}[✓] All dependencies installed${NC}"
+    fi
+}
 
-# Create the listener script
-echo -e "${YELLOW}[2/4] Creating listener...${NC}"
-cat > ~/remote-control.py << EOF
+# Function to get/set IP
+configure_ip() {
+    show_header
+    echo -e "${CYAN}=== NETWORK CONFIGURATION ===${NC}\n"
+    
+    # Get local IP
+    LOCAL_IP=$(hostname -I | awk '{print $1}')
+    
+    if [ -f "$CONFIG_DIR/ip.conf" ]; then
+        SAVED_IP=$(cat "$CONFIG_DIR/ip.conf")
+        echo -e "Your IP: ${GREEN}$LOCAL_IP${NC}"
+        echo -e "Saved IP: ${YELLOW}$SAVED_IP${NC}"
+        LISTENER_IP="$SAVED_IP"
+    else
+        echo -e "Your IP: ${GREEN}$LOCAL_IP${NC}"
+        LISTENER_IP="$LOCAL_IP"
+    fi
+    
+    echo
+    echo "1) Use current IP: $LISTENER_IP"
+    echo "2) Enter custom IP"
+    echo "3) Back to main menu"
+    echo
+    read -p "Choose [1-3]: " ip_choice
+    
+    case $ip_choice in
+        1)
+            echo "$LISTENER_IP" > "$CONFIG_DIR/ip.conf"
+            echo -e "${GREEN}✓ IP saved${NC}"
+            ;;
+        2)
+            read -p "Enter IP address: " custom_ip
+            if [[ $custom_ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "$custom_ip" > "$CONFIG_DIR/ip.conf"
+                LISTENER_IP="$custom_ip"
+                echo -e "${GREEN}✓ IP saved${NC}"
+            else
+                echo -e "${RED}Invalid IP format${NC}"
+                sleep 2
+            fi
+            ;;
+    esac
+    
+    # Load the IP
+    if [ -f "$CONFIG_DIR/ip.conf" ]; then
+        LISTENER_IP=$(cat "$CONFIG_DIR/ip.conf")
+    fi
+}
+
+# Function for ADB wireless connection
+menu_adb_wireless() {
+    while true; do
+        show_header
+        echo -e "${CYAN}=== ADB WIRELESS CONNECTION ===${NC}\n"
+        echo -e "Target IP: ${GREEN}$LISTENER_IP${NC}"
+        echo -e "Port: ${GREEN}5555${NC}\n"
+        
+        echo "1) Connect via USB first (setup wireless)"
+        echo "2) Connect directly to IP"
+        echo "3) List connected devices"
+        echo "4) Disconnect all devices"
+        echo "5) Back to main menu"
+        echo
+        read -p "Choose [1-5]: " adb_choice
+        
+        case $adb_choice in
+            1)
+                echo -e "\n${YELLOW}[*] USB to Wireless Setup${NC}"
+                echo "1. Connect phone via USB"
+                echo "2. Enable USB debugging"
+                read -p "Press Enter when ready..."
+                
+                # Check devices
+                adb devices
+                
+                # Switch to wireless
+                echo -e "\n${YELLOW}[*] Switching to wireless mode...${NC}"
+                adb tcpip 5555
+                
+                echo -e "\n${YELLOW}[*] Now disconnect USB and press Enter${NC}"
+                read -p ""
+                
+                # Connect wirelessly
+                echo -e "\n${YELLOW}[*] Connecting to $LISTENER_IP:5555...${NC}"
+                adb connect $LISTENER_IP:5555
+                
+                # Show result
+                sleep 2
+                adb devices
+                
+                echo -e "\n${GREEN}✓ Wireless connection setup complete${NC}"
+                read -p "Press Enter to continue..."
+                ;;
+            2)
+                echo -e "\n${YELLOW}[*] Connecting to $LISTENER_IP:5555...${NC}"
+                adb connect $LISTENER_IP:5555
+                sleep 2
+                adb devices
+                read -p "Press Enter to continue..."
+                ;;
+            3)
+                echo -e "\n${YELLOW}[*] Connected devices:${NC}"
+                adb devices
+                read -p "Press Enter to continue..."
+                ;;
+            4)
+                echo -e "\n${YELLOW}[*] Disconnecting all...${NC}"
+                adb disconnect
+                read -p "Press Enter to continue..."
+                ;;
+            5)
+                return
+                ;;
+        esac
+    done
+}
+
+# Function for screen mirroring
+menu_screen_mirror() {
+    while true; do
+        show_header
+        echo -e "${CYAN}=== SCREEN MIRRORING ===${NC}\n"
+        
+        echo "1) Start screen mirror (scrcpy)"
+        echo "2) Start with options"
+        echo "3) Record screen"
+        echo "4) Take screenshot"
+        echo "5) Back to main menu"
+        echo
+        read -p "Choose [1-5]: " screen_choice
+        
+        case $screen_choice in
+            1)
+                echo -e "\n${YELLOW}[*] Starting scrcpy...${NC}"
+                echo "Press Ctrl+C to stop"
+                scrcpy
+                ;;
+            2)
+                echo -e "\n${YELLOW}Options:${NC}"
+                echo "-b 2M    : Set bitrate to 2Mbps"
+                echo "-f       : Fullscreen"
+                echo "-r file  : Record to file"
+                echo "-S       : Turn screen off"
+                echo "--turn-screen-off : Turn screen off"
+                echo
+                read -p "Enter options: " scrcpy_opts
+                scrcpy $scrcpy_opts
+                ;;
+            3)
+                FILENAME="screen_recording_$(date +%Y%m%d_%H%M%S).mp4"
+                echo -e "\n${YELLOW}[*] Recording to $FILENAME${NC}"
+                echo "Press Ctrl+C to stop recording"
+                scrcpy -r "$FILENAME"
+                echo -e "${GREEN}✓ Recording saved to $FILENAME${NC}"
+                read -p "Press Enter..."
+                ;;
+            4)
+                FILENAME="screenshot_$(date +%Y%m%d_%H%M%S).png"
+                echo -e "\n${YELLOW}[*] Taking screenshot...${NC}"
+                scrcpy --window-title="Screenshot" --lock-video-orientation=0 -t
+                adb exec-out screencap -p > "$FILENAME"
+                echo -e "${GREEN}✓ Screenshot saved to $FILENAME${NC}"
+                read -p "Press Enter..."
+                ;;
+            5)
+                return
+                ;;
+        esac
+    done
+}
+
+# Function for file management
+menu_file_manager() {
+    while true; do
+        show_header
+        echo -e "${CYAN}=== FILE MANAGER ===${NC}\n"
+        
+        echo "1) List files (current directory)"
+        echo "2) Push file to device"
+        echo "3) Pull file from device"
+        echo "4) Install APK"
+        echo "5) Browse device storage"
+        echo "6) Back to main menu"
+        echo
+        read -p "Choose [1-6]: " file_choice
+        
+        case $file_choice in
+            1)
+                echo -e "\n${YELLOW}[*] Current directory:${NC}"
+                adb shell ls -la
+                read -p "Press Enter..."
+                ;;
+            2)
+                read -p "Local file path: " local_file
+                read -p "Remote path (default: /sdcard/): " remote_path
+                remote_path=${remote_path:-/sdcard/}
+                echo -e "\n${YELLOW}[*] Pushing file...${NC}"
+                adb push "$local_file" "$remote_path"
+                read -p "Press Enter..."
+                ;;
+            3)
+                read -p "Remote file path: " remote_file
+                read -p "Local destination (default: ./): " local_dest
+                local_dest=${local_dest:-./}
+                echo -e "\n${YELLOW}[*] Pulling file...${NC}"
+                adb pull "$remote_file" "$local_dest"
+                read -p "Press Enter..."
+                ;;
+            4)
+                read -p "APK file path: " apk_file
+                echo -e "\n${YELLOW}[*] Installing APK...${NC}"
+                adb install "$apk_file"
+                read -p "Press Enter..."
+                ;;
+            5)
+                echo -e "\n${YELLOW}[*] Opening file browser...${NC}"
+                echo "Use 'ls', 'cd', 'pull <file>', 'push <file>'"
+                echo "Type 'exit' to quit"
+                echo
+                adb shell
+                ;;
+            6)
+                return
+                ;;
+        esac
+    done
+}
+
+# Function for device control
+menu_device_control() {
+    while true; do
+        show_header
+        echo -e "${CYAN}=== DEVICE CONTROL ===${NC}\n"
+        
+        echo "1) Open shell on device"
+        echo "2) Take screenshot (save to computer)"
+        echo "3) Record video"
+        echo "4) Reboot device"
+        echo "5) Get device info"
+        echo "6) Install multiple APKs"
+        echo "7) Back to main menu"
+        echo
+        read -p "Choose [1-7]: " control_choice
+        
+        case $control_choice in
+            1)
+                echo -e "\n${YELLOW}[*] Opening shell (type 'exit' to quit)${NC}\n"
+                adb shell
+                ;;
+            2)
+                FILENAME="screenshot_$(date +%Y%m%d_%H%M%S).png"
+                echo -e "\n${YELLOW}[*] Taking screenshot...${NC}"
+                adb exec-out screencap -p > "$FILENAME"
+                echo -e "${GREEN}✓ Saved to $FILENAME${NC}"
+                read -p "Press Enter..."
+                ;;
+            3)
+                FILENAME="video_$(date +%Y%m%d_%H%M%S).mp4"
+                echo -e "\n${YELLOW}[*] Recording video (Ctrl+C to stop)${NC}"
+                echo "Press Ctrl+C when done"
+                adb shell screenrecord /sdcard/$FILENAME &
+                RECORD_PID=$!
+                read -p "Recording... Press Enter to stop"
+                kill $RECORD_PID 2>/dev/null
+                adb pull /sdcard/$FILENAME
+                adb shell rm /sdcard/$FILENAME
+                echo -e "${GREEN}✓ Video saved to $FILENAME${NC}"
+                ;;
+            4)
+                echo -e "\n${YELLOW}[*] Reboot options:${NC}"
+                echo "1) Normal reboot"
+                echo "2) Reboot to bootloader"
+                echo "3) Reboot to recovery"
+                read -p "Choose: " reboot_choice
+                case $reboot_choice in
+                    1) adb reboot ;;
+                    2) adb reboot bootloader ;;
+                    3) adb reboot recovery ;;
+                esac
+                ;;
+            5)
+                echo -e "\n${GREEN}Device Information:${NC}"
+                echo "Model: $(adb shell getprop ro.product.model)"
+                echo "Manufacturer: $(adb shell getprop ro.product.manufacturer)"
+                echo "Android: $(adb shell getprop ro.build.version.release)"
+                echo "SDK: $(adb shell getprop ro.build.version.sdk)"
+                echo "Battery: $(adb shell dumpsys battery | grep level)"
+                echo "Storage:"
+                adb shell df /sdcard
+                read -p "Press Enter..."
+                ;;
+            6)
+                echo -e "\n${YELLOW}[*] Select APK files to install${NC}"
+                echo "Enter APK files (space-separated) or '*' for all apks:"
+                read -p "> " apk_files
+                if [ "$apk_files" = "*" ]; then
+                    for apk in *.apk; do
+                        echo "Installing $apk..."
+                        adb install "$apk"
+                    done
+                else
+                    for apk in $apk_files; do
+                        echo "Installing $apk..."
+                        adb install "$apk"
+                    done
+                fi
+                read -p "Press Enter..."
+                ;;
+            7)
+                return
+                ;;
+        esac
+    done
+}
+
+# Function for Python listener (custom app)
+menu_python_listener() {
+    while true; do
+        show_header
+        echo -e "${CYAN}=== CUSTOM APP LISTENER ===${NC}\n"
+        
+        # Check if listener script exists
+        if [ ! -f "$CONFIG_DIR/listener.py" ]; then
+            echo -e "${YELLOW}[*] Creating listener script...${NC}"
+            cat > "$CONFIG_DIR/listener.py" << 'EOF'
 #!/usr/bin/env python3
 import socket
 import threading
@@ -46,11 +404,10 @@ import struct
 import tkinter as tk
 from PIL import Image, ImageTk
 import queue
-import os
-import subprocess
+import time
 
-LISTENER_IP = "$LISTENER_IP"
-LISTENER_PORT = $LISTENER_PORT
+LISTENER_IP = "0.0.0.0"
+LISTENER_PORT = 5555
 
 class ScreenViewer:
     def __init__(self):
@@ -66,7 +423,6 @@ class ScreenViewer:
         try:
             img = self.image_queue.get_nowait()
             if img is not None:
-                # Resize to fit window
                 window_width = self.root.winfo_width()
                 window_height = self.root.winfo_height()
                 if window_width > 1 and window_height > 1:
@@ -99,29 +455,21 @@ class RemoteClient:
         while self.running:
             try:
                 if self.streaming:
-                    # Read image size
                     size_data = self.conn.recv(4)
-                    if not size_data or len(size_data) < 4:
-                        continue
+                    if not size_data: continue
                     img_size = struct.unpack('!I', size_data)[0]
                     
-                    # Read image data
                     img_data = b''
                     remaining = img_size
                     while remaining > 0:
                         chunk = self.conn.recv(min(8192, remaining))
-                        if not chunk:
-                            break
                         img_data += chunk
                         remaining -= len(chunk)
                     
-                    # Display image
                     img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
                     if img is not None and self.viewer:
                         self.viewer.image_queue.put(img)
-            except Exception as e:
-                print(f"Stream error: {e}")
-                break
+            except: break
         
         self.conn.close()
         print(f"[-] Disconnected")
@@ -142,26 +490,18 @@ class RemoteClient:
                     if self.viewer:
                         self.viewer.root.quit()
                     print("[*] Streaming stopped")
-                elif cmd == "shell":
-                    print("[*] Opening interactive shell...")
-                    self.conn.send(b"SHELL\n")
                 elif cmd == "exit":
                     self.conn.send(b"EXIT\n")
                     self.running = False
                     break
-                else:
-                    print("Commands: stream, stop, shell, exit")
-            except Exception as e:
-                print(f"Command error: {e}")
-                break
+            except: break
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((LISTENER_IP, LISTENER_PORT))
     server.listen(5)
-    
-    print(f"\n\033[92mListening on {LISTENER_IP}:{LISTENER_PORT}\033[0m")
+    print(f"\nListening on port {LISTENER_PORT}")
     print("Waiting for connections...\n")
     
     while True:
@@ -171,155 +511,135 @@ def start_server():
 if __name__ == "__main__":
     start_server()
 EOF
-
-chmod +x ~/remote-control.py
-
-# Create the Android app using MIT App Inventor (web-based)
-echo -e "${YELLOW}[3/4] Creating Android app...${NC}"
-
-# Create a simple Python HTTP server to serve the app
-cat > ~/create-apk.py << 'EOF'
-#!/usr/bin/env python3
-import os
-import zipfile
-import tempfile
-import shutil
-
-print("Creating Android app...")
-
-# Create a temporary directory
-temp_dir = tempfile.mkdtemp()
-
-# Create the app structure
-os.makedirs(os.path.join(temp_dir, "src"))
-
-# Create the main activity
-with open(os.path.join(temp_dir, "src", "MainActivity.java"), "w") as f:
-    f.write("""
-package com.remote.access;
-
-import android.app.Activity;
-import android.os.Bundle;
-
-public class MainActivity extends Activity {
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-    }
+            chmod +x "$CONFIG_DIR/listener.py"
+            echo -e "${GREEN}✓ Listener created${NC}"
+        fi
+        
+        echo "1) Start listener (port 5555)"
+        echo "2) Start listener with custom port"
+        echo "3) View instructions for custom app"
+        echo "4) Back to main menu"
+        echo
+        read -p "Choose [1-4]: " listener_choice
+        
+        case $listener_choice in
+            1)
+                echo -e "\n${YELLOW}[*] Starting listener on port 5555...${NC}"
+                echo "Press Ctrl+C to stop"
+                cd "$CONFIG_DIR"
+                python3 listener.py
+                ;;
+            2)
+                read -p "Enter port number: " custom_port
+                echo -e "\n${YELLOW}[*] Starting listener on port $custom_port...${NC}"
+                sed -i "s/LISTENER_PORT = [0-9]*/LISTENER_PORT = $custom_port/" "$CONFIG_DIR/listener.py"
+                echo "Press Ctrl+C to stop"
+                cd "$CONFIG_DIR"
+                python3 listener.py
+                ;;
+            3)
+                echo -e "\n${GREEN}=== CUSTOM APP INSTRUCTIONS ===${NC}"
+                echo ""
+                echo "To create a custom Android app that connects here:"
+                echo ""
+                echo "1. Use MIT App Inventor (appinventor.mit.edu)"
+                echo "2. Create app with Socket connection"
+                echo "3. Connect to: $LISTENER_IP:5555"
+                echo "4. Send commands: START_STREAM, STOP_STREAM"
+                echo ""
+                echo "The app should:"
+                echo "- Request screen capture permission"
+                echo "- Capture screen as JPEG"
+                echo "- Send image size (4 bytes) then image data"
+                echo ""
+                read -p "Press Enter..."
+                ;;
+            4)
+                return
+                ;;
+        esac
+    done
 }
-""")
 
-# Create layout
-os.makedirs(os.path.join(temp_dir, "res", "layout"))
-with open(os.path.join(temp_dir, "res", "layout", "activity_main.xml"), "w") as f:
-    f.write("""
-<?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Remote Access App"
-        android:textSize="24sp"
-        android:layout_gravity="center"/>
-</LinearLayout>
-""")
+# Main menu
+main_menu() {
+    while true; do
+        show_header
+        
+        # Load saved IP
+        if [ -f "$CONFIG_DIR/ip.conf" ]; then
+            LISTENER_IP=$(cat "$CONFIG_DIR/ip.conf")
+            IP_STATUS="${GREEN}$LISTENER_IP${NC}"
+        else
+            IP_STATUS="${RED}Not configured${NC}"
+        fi
+        
+        echo -e "Target IP: $IP_STATUS  |  Port: ${GREEN}5555${NC}\n"
+        
+        echo -e "${WHITE}╔════════════════════════════════════════╗${NC}"
+        echo -e "${WHITE}║           MAIN MENU                    ║${NC}"
+        echo -e "${WHITE}╠════════════════════════════════════════╣${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}1)${NC}  Configure IP Address              ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}2)${NC}  ADB Wireless Connection           ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}3)${NC}  Screen Mirroring                  ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}4)${NC}  File Manager                      ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}5)${NC}  Device Control                    ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}6)${NC}  Custom App Listener               ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}7)${NC}  Quick Connect (ADB + scrcpy)      ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${CYAN}8)${NC}  View Connection Info              ${WHITE}║${NC}"
+        echo -e "${WHITE}║${NC}  ${RED}9)${NC}  Exit                              ${WHITE}║${NC}"
+        echo -e "${WHITE}╚════════════════════════════════════════╝${NC}"
+        echo
+        read -p "Enter your choice [1-9]: " main_choice
+        
+        case $main_choice in
+            1) configure_ip ;;
+            2) menu_adb_wireless ;;
+            3) menu_screen_mirror ;;
+            4) menu_file_manager ;;
+            5) menu_device_control ;;
+            6) menu_python_listener ;;
+            7)
+                echo -e "\n${YELLOW}[*] Quick Connect:${NC}"
+                echo "1. Ensure phone is connected via USB"
+                echo "2. Enable USB debugging"
+                read -p "Press Enter when ready..."
+                
+                adb tcpip 5555
+                echo -e "\n${YELLOW}Now disconnect USB and press Enter${NC}"
+                read -p ""
+                
+                adb connect $LISTENER_IP:5555
+                sleep 2
+                scrcpy
+                ;;
+            8)
+                show_header
+                echo -e "${GREEN}=== CONNECTION INFORMATION ===${NC}\n"
+                echo "Your IP: $(hostname -I | awk '{print $1}')"
+                echo "Configured IP: $LISTENER_IP"
+                echo "ADB port: 5555"
+                echo "Custom app port: 5555"
+                echo ""
+                echo "Connected devices:"
+                adb devices
+                echo ""
+                read -p "Press Enter..."
+                ;;
+            9)
+                echo -e "\n${GREEN}Goodbye!${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option${NC}"
+                sleep 2
+                ;;
+        esac
+    done
+}
 
-# Create AndroidManifest.xml
-with open(os.path.join(temp_dir, "AndroidManifest.xml"), "w") as f:
-    f.write("""
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.remote.access">
-    <application
-        android:label="Remote Access">
-        <activity android:name=".MainActivity">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-""")
+# Check dependencies on startup
+check_dependencies
 
-# Create a zip file
-with zipfile.ZipFile(os.path.expanduser("~/remote-access-app.zip"), "w") as zipf:
-    for root, dirs, files in os.walk(temp_dir):
-        for file in files:
-            file_path = os.path.join(root, file)
-            arcname = os.path.relpath(file_path, temp_dir)
-            zipf.write(file_path, arcname)
-
-# Cleanup
-shutil.rmtree(temp_dir)
-
-print("App template created at ~/remote-access-app.zip")
-print("\nTo build the APK:")
-print("1. Go to: https://appinventor.mit.edu/")
-print("2. Click 'Create Apps'")
-print("3. Sign in with Google")
-print("4. Click 'Projects' -> 'Import project (.aia) from my computer'")
-print("5. Upload the zip file")
-print("6. Click 'Build' -> 'Android App (.apk)'")
-EOF
-
-chmod +x ~/create-apk.py
-
-# Create ADB helper script
-echo -e "${YELLOW}[4/4] Creating ADB helper...${NC}"
-cat > ~/adb-connect.sh << EOF
-#!/bin/bash
-echo "=== ADB Remote Connect Helper ==="
-echo "1. Connect your Android device via USB"
-echo "2. Enable USB debugging"
-echo "3. Run: adb tcpip 5555"
-echo "4. Disconnect USB"
-echo "5. Run: adb connect $LISTENER_IP:5555"
-echo ""
-echo "Then you can use: scrcpy -s $LISTENER_IP:5555"
-EOF
-
-chmod +x ~/adb-connect.sh
-
-# Final instructions
-clear
-echo -e "${GREEN}"
-echo "╔════════════════════════════════════════════════════════╗"
-echo "║                    SETUP COMPLETE!                     ║"
-echo "╚════════════════════════════════════════════════════════╝"
-echo -e "${NC}"
-
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}OPTION 1: Use ADB + scrcpy (EASIEST - requires USB once)${NC}"
-echo ""
-echo "1. On Android:"
-echo "   • Enable Developer Options"
-echo "   • Enable USB Debugging"
-echo ""
-echo "2. Connect USB and run:"
-echo "   adb devices"
-echo "   adb tcpip 5555"
-echo "   adb connect $LISTENER_IP:5555"
-echo ""
-echo "3. View screen:"
-echo "   scrcpy -s $LISTENER_IP:5555"
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}OPTION 2: Use the custom APK builder${NC}"
-echo ""
-echo "1. Generate app template:"
-echo "   python3 ~/create-apk.py"
-echo ""
-echo "2. Follow the instructions to build APK using MIT App Inventor"
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${YELLOW}OPTION 3: Use the Python listener for custom apps${NC}"
-echo ""
-echo "Start listener:"
-echo "  python3 ~/remote-control.py"
-echo ""
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# Start the menu
+main_menu
