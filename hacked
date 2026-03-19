@@ -1,967 +1,435 @@
 #!/bin/bash
 
-# =============================================
-# ANDROID REMOTE ACCESS APK BUILDER
-# This creates a REAL APK file on your Desktop
-# =============================================
+# ==============================================
+#    TOPH41K PORT SCANNER - ADVANCED EDITION
+#         For Educational Use Only
+#     Test ONLY on networks you own!
+# ==============================================
 
-# Configuration
-DESKTOP="$HOME/Desktop"
-APK_NAME="RemoteAccess"
-PACKAGE_NAME="com.remote.access"
-LISTENER_IP=""
-LISTENER_PORT="4444"
-
-# Colors
+# Color codes for better visibility
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+NC='\033[0m' # No Color
 
-# Create Desktop folder
-mkdir -p "$DESKTOP"
+# Global variables
+TARGET=""
+START_PORT=1
+END_PORT=1024
+TIMEOUT=1
+THREADS=50
+SCAN_TYPE="tcp"
 
-# =============================================
-# CHECK AND INSTALL DEPENDENCIES
-# =============================================
+# Function to display banner
+show_banner() {
+    clear
+    echo -e "${RED}"
+    cat << "EOF"
+ ╔══════════════════════════════════════════════════════════╗
+ ║     _______  _______  _______  _        _______          ║
+ ║    (  ____ \(  ___  )(       )| \    /\(  ____ \|\     /|║
+ ║    | (    \/| (   ) || () () ||  \  / /| (    \/| )   ( |║
+ ║    | (_____ | |   | || || || ||  (_/ / | (__    | |   | |║
+ ║    (_____  )| |   | || |(_)| ||   _ (  |  __)   | |   | |║
+ ║          ) || |   | || |   | ||  ( \ \ | (      | |   | |║
+ ║    /\____) || (___) || )   ( ||  /  \ \| (____/\| (___) |║
+ ║    \_______)(_______)|/     \||_/    \/(_______/(_______)║
+ ║                                                          ║
+ ║              ADVANCED PORT SCANNER v2.0                 ║
+ ║              [ Educational Purpose Only ]               ║
+ ╚══════════════════════════════════════════════════════════╝
+EOF
+    echo -e "${NC}"
+    echo -e "${YELLOW}Warning: Use only on networks you own or have permission to scan!${NC}"
+    echo -e "${YELLOW}Unauthorized scanning may be illegal.${NC}\n"
+}
 
+# Function to check dependencies
 check_dependencies() {
-    echo -e "${YELLOW}Checking dependencies...${NC}"
+    echo -e "${BLUE}[*] Checking dependencies...${NC}"
     
-    # Check Java
-    if ! command -v java &> /dev/null; then
-        echo "Installing Java..."
-        sudo apt update
-        sudo apt install -y openjdk-17-jdk
-    fi
-    
-    # Check Android SDK
-    if [ ! -d "$HOME/Android/Sdk" ]; then
-        echo "Downloading Android SDK..."
-        mkdir -p "$HOME/Android/Sdk"
-        cd "$HOME/Android/Sdk"
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-        unzip -q commandlinetools-linux-*.zip
-        rm commandlinetools-linux-*.zip
-        mv cmdline-tools latest
-        mkdir -p cmdline-tools
-        mv latest cmdline-tools/
-        
-        # Set environment variables
-        export ANDROID_HOME="$HOME/Android/Sdk"
-        export PATH="$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools"
-        
-        # Accept licenses
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
-        
-        # Install SDK components
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-    fi
-    
-    echo -e "${GREEN}✓ Dependencies ready${NC}"
-}
-
-# =============================================
-# CONFIGURE IP AND PORT
-# =============================================
-
-configure_settings() {
-    clear
-    echo -e "${BLUE}=== CONFIGURE CONNECTION SETTINGS ===${NC}\n"
-    
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-    echo -e "Your computer's IP: ${GREEN}$LOCAL_IP${NC}"
-    echo ""
-    
-    read -p "Enter IP address for APK to connect to [$LOCAL_IP]: " input_ip
-    LISTENER_IP=${input_ip:-$LOCAL_IP}
-    
-    read -p "Enter port number [$LISTENER_PORT]: " input_port
-    LISTENER_PORT=${input_port:-$LISTENER_PORT}
-    
-    echo -e "${GREEN}✓ Settings saved: $LISTENER_IP:$LISTENER_PORT${NC}"
-    sleep 2
-}
-
-# =============================================
-# METHOD 1: BUILD APK USING ANDROID STUDIO PROJECT
-# =============================================
-
-build_android_studio_apk() {
-    clear
-    echo -e "${BLUE}=== BUILDING APK USING ANDROID STUDIO PROJECT ===${NC}\n"
-    
-    PROJECT_DIR="$DESKTOP/RemoteAccessProject"
-    mkdir -p "$PROJECT_DIR/app/src/main/java/com/remote/access"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/layout"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/values"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/mipmap-hdpi"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/mipmap-mdpi"
-    mkdir -p "$PROJECT_DIR/app/src/main/res/mipmap-xhdpi"
-    
-    cd "$PROJECT_DIR"
-    
-    # Create build.gradle (root)
-    cat > build.gradle << 'EOF'
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.4.0'
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-EOF
-
-    # Create settings.gradle
-    cat > settings.gradle << 'EOF'
-include ':app'
-rootProject.name = "RemoteAccess"
-EOF
-
-    # Create gradle.properties
-    cat > gradle.properties << 'EOF'
-org.gradle.jvmargs=-Xmx2048m
-android.useAndroidX=true
-EOF
-
-    # Create app/build.gradle
-    cat > app/build.gradle << 'EOF'
-plugins {
-    id 'com.android.application'
-}
-
-android {
-    namespace 'com.remote.access'
-    compileSdk 34
-    
-    defaultConfig {
-        applicationId "com.remote.access"
-        minSdk 21
-        targetSdk 34
-        versionCode 1
-        versionName "1.0"
-    }
-    
-    buildTypes {
-        release {
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-        }
-    }
-}
-
-dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-}
-EOF
-
-    # Create AndroidManifest.xml
-    cat > app/src/main/AndroidManifest.xml << EOF
-<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    
-    <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
-        android:label="Remote Access"
-        android:theme="@style/AppTheme">
-        
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-        
-        <service android:name=".RemoteService" />
-    </application>
-</manifest>
-EOF
-
-    # Create MainActivity.java
-    cat > app/src/main/java/com/remote/access/MainActivity.java << EOF
-package com.remote.access;
-
-import android.os.Bundle;
-import android.view.View;
-import android.widget.*;
-import androidx.appcompat.app.AppCompatActivity;
-import android.content.Intent;
-import android.graphics.Color;
-
-public class MainActivity extends AppCompatActivity {
-    
-    private EditText ipInput, portInput;
-    private Button connectBtn;
-    private TextView statusText;
-    private LinearLayout controlPanel;
-    
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        
-        // Main layout
-        LinearLayout mainLayout = new LinearLayout(this);
-        mainLayout.setOrientation(LinearLayout.VERTICAL);
-        mainLayout.setPadding(50, 50, 50, 50);
-        mainLayout.setBackgroundColor(Color.parseColor("#f5f5f5"));
-        
-        // Title
-        TextView title = new TextView(this);
-        title.setText("🔐 Remote Access");
-        title.setTextSize(28);
-        title.setTextColor(Color.parseColor("#2196F3"));
-        title.setPadding(0, 0, 0, 30);
-        mainLayout.addView(title);
-        
-        // IP Input
-        TextView ipLabel = new TextView(this);
-        ipLabel.setText("Server IP Address:");
-        ipLabel.setTextSize(14);
-        ipLabel.setPadding(0, 10, 0, 5);
-        mainLayout.addView(ipLabel);
-        
-        ipInput = new EditText(this);
-        ipInput.setText("$LISTENER_IP");
-        ipInput.setHint("Enter IP address");
-        ipInput.setPadding(15, 10, 15, 10);
-        ipInput.setBackgroundResource(android.R.drawable.editbox_background);
-        mainLayout.addView(ipInput);
-        
-        // Port Input
-        TextView portLabel = new TextView(this);
-        portLabel.setText("Port:");
-        portLabel.setTextSize(14);
-        portLabel.setPadding(0, 20, 0, 5);
-        mainLayout.addView(portLabel);
-        
-        portInput = new EditText(this);
-        portInput.setText("$LISTENER_PORT");
-        portInput.setHint("Enter port");
-        portInput.setInputType(2);
-        portInput.setPadding(15, 10, 15, 10);
-        portInput.setBackgroundResource(android.R.drawable.editbox_background);
-        mainLayout.addView(portInput);
-        
-        // Connect Button
-        connectBtn = new Button(this);
-        connectBtn.setText("CONNECT");
-        connectBtn.setTextSize(16);
-        connectBtn.setTextColor(Color.WHITE);
-        connectBtn.setBackgroundColor(Color.parseColor("#4CAF50"));
-        connectBtn.setPadding(0, 15, 0, 15);
-        connectBtn.setLayoutParams(new LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT));
-        connectBtn.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                String ip = ipInput.getText().toString();
-                int port = Integer.parseInt(portInput.getText().toString());
-                
-                Intent intent = new Intent(MainActivity.this, RemoteService.class);
-                intent.putExtra("ip", ip);
-                intent.putExtra("port", port);
-                startService(intent);
-                
-                statusText.setText("Connecting to " + ip + ":" + port);
-                statusText.setTextColor(Color.parseColor("#FF9800"));
-                controlPanel.setVisibility(View.VISIBLE);
-            }
-        });
-        mainLayout.addView(connectBtn);
-        
-        // Status
-        statusText = new TextView(this);
-        statusText.setText("Not connected");
-        statusText.setTextSize(14);
-        statusText.setPadding(0, 20, 0, 10);
-        statusText.setTextColor(Color.GRAY);
-        mainLayout.addView(statusText);
-        
-        // Control Panel
-        controlPanel = new LinearLayout(this);
-        controlPanel.setOrientation(LinearLayout.VERTICAL);
-        controlPanel.setVisibility(View.GONE);
-        
-        TextView controlTitle = new TextView(this);
-        controlTitle.setText("Remote Commands");
-        controlTitle.setTextSize(18);
-        controlTitle.setTextColor(Color.parseColor("#2196F3"));
-        controlTitle.setPadding(0, 20, 0, 10);
-        controlPanel.addView(controlTitle);
-        
-        String[] buttons = {"📹 Start Camera", "⏹ Stop Camera", "📸 Screenshot", "ℹ Device Info"};
-        for (String text : buttons) {
-            Button btn = new Button(this);
-            btn.setText(text);
-            btn.setTextSize(14);
-            btn.setBackgroundColor(Color.parseColor("#2196F3"));
-            btn.setTextColor(Color.WHITE);
-            btn.setPadding(10, 10, 10, 10);
-            btn.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
-            
-            final String cmd = text.split(" ")[1];
-            btn.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    Intent intent = new Intent(MainActivity.this, RemoteService.class);
-                    intent.putExtra("command", cmd.toLowerCase());
-                    startService(intent);
-                }
-            });
-            controlPanel.addView(btn);
-        }
-        
-        mainLayout.addView(controlPanel);
-        setContentView(mainLayout);
-    }
-}
-EOF
-
-    # Create RemoteService.java
-    cat > app/src/main/java/com/remote/access/RemoteService.java << EOF
-package com.remote.access;
-
-import android.app.Service;
-import android.content.Intent;
-import android.os.IBinder;
-import android.util.Log;
-import java.io.*;
-import java.net.*;
-import android.widget.Toast;
-import android.os.Handler;
-import android.os.Looper;
-
-public class RemoteService extends Service {
-    private static final String TAG = "RemoteService";
-    private Socket socket;
-    private PrintWriter out;
-    private Thread connectionThread;
-    private boolean connected = false;
-    
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        String ip = intent.getStringExtra("ip");
-        int port = intent.getIntExtra("port", 4444);
-        String command = intent.getStringExtra("command");
-        
-        if (command != null) {
-            sendCommand(command);
-        } else {
-            connectToServer(ip, port);
-        }
-        
-        return START_STICKY;
-    }
-    
-    private void connectToServer(String ip, int port) {
-        connectionThread = new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    socket = new Socket(ip, port);
-                    out = new PrintWriter(socket.getOutputStream(), true);
-                    connected = true;
-                    
-                    showToast("Connected to " + ip);
-                    
-                    // Send device info
-                    String info = android.os.Build.MANUFACTURER + " " + 
-                                 android.os.Build.MODEL + "|" + 
-                                 android.os.Build.VERSION.RELEASE;
-                    out.println("INFO:" + info);
-                    
-                    // Keep connection alive
-                    while (connected) {
-                        Thread.sleep(1000);
-                    }
-                    
-                } catch (Exception e) {
-                    showToast("Connection failed: " + e.getMessage());
-                    Log.e(TAG, "Connection error", e);
-                }
-            }
-        });
-        connectionThread.start();
-    }
-    
-    private void sendCommand(String cmd) {
-        if (out != null) {
-            if (cmd.equals("camera")) {
-                out.println("START_CAMERA");
-                showToast("Starting camera...");
-            } else if (cmd.equals("stop")) {
-                out.println("STOP_CAMERA");
-                showToast("Stopping camera...");
-            } else if (cmd.equals("screenshot")) {
-                out.println("SCREENSHOT");
-                showToast("Taking screenshot...");
-            } else if (cmd.equals("info")) {
-                out.println("DEVICE_INFO");
-            }
-        }
-    }
-    
-    private void showToast(final String message) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
-            @Override
-            public void run() {
-                Toast.makeText(RemoteService.this, message, Toast.LENGTH_SHORT).show();
-            }
-        });
-    }
-    
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
-    
-    @Override
-    public void onDestroy() {
-        connected = false;
-        try {
-            if (socket != null) socket.close();
-        } catch (Exception e) {}
-        super.onDestroy();
-    }
-}
-EOF
-
-    # Create styles.xml
-    cat > app/src/main/res/values/styles.xml << 'EOF'
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
-        <item name="colorPrimary">#2196F3</item>
-        <item name="colorPrimaryDark">#1976D2</item>
-        <item name="colorAccent">#4CAF50</item>
-    </style>
-</resources>
-EOF
-
-    # Create proguard-rules.pro
-    cat > app/proguard-rules.pro << 'EOF'
--keep class com.remote.access.** { *; }
--dontwarn android.**
-EOF
-
-    # Create gradlew wrapper
-    echo -e "${YELLOW}Creating Gradle wrapper...${NC}"
-    cd "$PROJECT_DIR"
-    gradle wrapper > /dev/null 2>&1
-    
-    # Create README
-    cat > "$DESKTOP/README.txt" << EOF
-=== REMOTE ACCESS APK ===
-
-Project location: $PROJECT_DIR
-Your IP: $LISTENER_IP
-Your Port: $LISTENER_PORT
-
-TO BUILD THE APK:
-
-Option 1 - Using Android Studio (EASIEST):
-1. Open Android Studio
-2. File -> Open -> Select "$PROJECT_DIR"
-3. Wait for Gradle sync
-4. Click Build -> Build APK
-5. Find APK in app/build/outputs/apk/debug/
-
-Option 2 - Using command line:
-1. cd "$PROJECT_DIR"
-2. ./gradlew assembleRelease
-3. APK will be in app/build/outputs/apk/release/
-
-Option 3 - Use online builder:
-1. Zip the project folder
-2. Go to https://www.appsgeyser.com
-3. Upload the zip file
-4. They will build the APK for you
-
-The APK will connect to: $LISTENER_IP:$LISTENER_PORT
-EOF
-
-    # Create zip of project
-    cd "$DESKTOP"
-    zip -r "RemoteAccessProject.zip" "RemoteAccessProject" > /dev/null 2>&1
-    
-    echo -e "${GREEN}✓ Android Studio project created!${NC}"
-    echo -e "${GREEN}✓ Project location: $PROJECT_DIR${NC}"
-    echo -e "${GREEN}✓ ZIP file: $DESKTOP/RemoteAccessProject.zip${NC}"
-    echo ""
-    echo -e "${YELLOW}README file created on Desktop with build instructions${NC}"
-}
-
-# =============================================
-# METHOD 2: CREATE WEBSITE FOR ONLINE APK BUILDER
-# =============================================
-
-build_website_apk() {
-    clear
-    echo -e "${BLUE}=== CREATING WEBSITE FOR ONLINE APK BUILDER ===${NC}\n"
-    
-    # Create HTML file
-    cat > "$DESKTOP/remote_app.html" << EOF
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Remote Access App</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-            background: rgba(255,255,255,0.1);
-            padding: 30px;
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-        }
-        h1 {
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 32px;
-        }
-        .server-info {
-            background: rgba(255,255,255,0.2);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 30px;
-            text-align: center;
-            font-size: 18px;
-        }
-        .ip-address {
-            font-size: 24px;
-            font-weight: bold;
-            margin: 10px 0;
-            color: #ffd700;
-        }
-        .button-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-        }
-        .button {
-            padding: 20px;
-            font-size: 18px;
-            border: none;
-            border-radius: 10px;
-            background: white;
-            color: #667eea;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            font-weight: bold;
-        }
-        .button:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }
-        .button.stream { background: #ff6b6b; color: white; }
-        .button.stop { background: #feca57; color: white; }
-        .status {
-            margin-top: 30px;
-            padding: 15px;
-            background: rgba(0,0,0,0.3);
-            border-radius: 10px;
-            text-align: center;
-            font-family: monospace;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>📱 Remote Access Control</h1>
-        
-        <div class="server-info">
-            <div>Connected to Server:</div>
-            <div class="ip-address">$LISTENER_IP:$LISTENER_PORT</div>
-        </div>
-        
-        <div class="button-grid">
-            <button class="button stream" onclick="sendCommand('stream')">▶ START CAMERA</button>
-            <button class="button stop" onclick="sendCommand('stop')">⏹ STOP CAMERA</button>
-            <button class="button" onclick="sendCommand('screenshot')">📸 SCREENSHOT</button>
-            <button class="button" onclick="sendCommand('info')">ℹ DEVICE INFO</button>
-            <button class="button" onclick="sendCommand('files')">📁 LIST FILES</button>
-            <button class="button" onclick="sendCommand('location')">📍 GET LOCATION</button>
-        </div>
-        
-        <div class="status" id="status">
-            Ready to send commands...
-        </div>
-        
-        <div id="response" style="margin-top: 20px; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px; display: none;"></div>
-    </div>
-    
-    <script>
-        function sendCommand(cmd) {
-            const status = document.getElementById('status');
-            const response = document.getElementById('response');
-            
-            status.innerHTML = 'Sending: ' + cmd + '...';
-            status.style.background = 'rgba(255, 193, 7, 0.3)';
-            
-            fetch('http://$LISTENER_IP:$LISTENER_PORT/' + cmd)
-                .then(r => r.text())
-                .then(data => {
-                    status.innerHTML = 'Command sent successfully!';
-                    status.style.background = 'rgba(76, 175, 80, 0.3)';
-                    response.style.display = 'block';
-                    response.innerHTML = '<strong>Response:</strong><br>' + data;
-                })
-                .catch(error => {
-                    status.innerHTML = 'Error: ' + error;
-                    status.style.background = 'rgba(244, 67, 54, 0.3)';
-                });
-        }
-        
-        // Test connection on load
-        window.onload = function() {
-            fetch('http://$LISTENER_IP:$LISTENER_PORT/ping')
-                .then(r => r.text())
-                .then(data => {
-                    document.getElementById('status').innerHTML = '✅ Connected to server';
-                })
-                .catch(error => {
-                    document.getElementById('status').innerHTML = '❌ Server not reachable';
-                });
-        };
-    </script>
-</body>
-</html>
-EOF
-
-    echo -e "${GREEN}✓ HTML file created on Desktop: remote_app.html${NC}"
-    echo ""
-    echo -e "${YELLOW}TO CREATE APK:${NC}"
-    echo "1. Go to: https://www.appsgeyser.com"
-    echo "2. Click 'Create App'"
-    echo "3. Choose 'Website to APK'"
-    echo "4. Upload the file: $DESKTOP/remote_app.html"
-    echo "5. Set app name: 'Remote Access'"
-    echo "6. Click 'Generate APK'"
-    echo ""
-    echo -e "${GREEN}The APK will download to your computer!${NC}"
-}
-
-# =============================================
-# METHOD 3: CREATE DROIDSCRIPT APK
-# =============================================
-
-build_droidscript_apk() {
-    clear
-    echo -e "${BLUE}=== CREATING DROIDSCRIPT APK ===${NC}\n"
-    
-    cat > "$DESKTOP/droidscript_app.js" << EOF
-// DroidScript Remote Access App
-// Copy this code into DroidScript to build APK
-
-var ip = "$LISTENER_IP";
-var port = $LISTENER_PORT;
-var socket;
-
-function OnStart() {
-    // Create layout
-    var lay = app.CreateLayout("linear", "FillXY");
-    lay.SetBackground("#2196F3");
-    
-    // Title
-    var title = app.CreateText("Remote Access");
-    title.SetTextSize(32);
-    title.SetTextColor("#FFFFFF");
-    title.SetMargins(0, 50, 0, 0);
-    lay.AddChild(title);
-    
-    // Server info
-    var info = app.CreateText(ip + ":" + port);
-    info.SetTextSize(20);
-    info.SetTextColor("#FFD700");
-    info.SetMargins(0, 20, 0, 50);
-    lay.AddChild(info);
-    
-    // Connect button
-    var btnConnect = app.CreateButton("Connect to Server", 0.7, 0.1);
-    btnConnect.SetTextColor("#2196F3");
-    btnConnect.SetBackground("#FFFFFF");
-    btnConnect.SetOnClick(btnConnect_OnClick);
-    lay.AddChild(btnConnect);
-    
-    // Status
-    var status = app.CreateText("Not connected");
-    status.SetTextSize(16);
-    status.SetTextColor("#FFFFFF");
-    status.SetMargins(0, 30, 0, 30);
-    lay.AddChild(status);
-    
-    // Control buttons (initially hidden)
-    var btnStream = app.CreateButton("Start Camera", 0.6, 0.1);
-    btnStream.SetTextColor("#2196F3");
-    btnStream.SetBackground("#4CAF50");
-    btnStream.SetTextColor("#FFFFFF");
-    btnStream.SetMargins(0, 10, 0, 0);
-    btnStream.SetOnClick(btnStream_OnClick);
-    btnStream.SetVisibility(false);
-    lay.AddChild(btnStream);
-    
-    var btnStop = app.CreateButton("Stop Camera", 0.6, 0.1);
-    btnStop.SetTextColor("#2196F3");
-    btnStop.SetBackground("#F44336");
-    btnStop.SetTextColor("#FFFFFF");
-    btnStop.SetMargins(0, 10, 0, 0);
-    btnStop.SetOnClick(btnStop_OnClick);
-    btnStop.SetVisibility(false);
-    lay.AddChild(btnStop);
-    
-    var btnPhoto = app.CreateButton("Take Photo", 0.6, 0.1);
-    btnPhoto.SetTextColor("#2196F3");
-    btnPhoto.SetBackground("#FF9800");
-    btnPhoto.SetTextColor("#FFFFFF");
-    btnPhoto.SetMargins(0, 10, 0, 0);
-    btnPhoto.SetOnClick(btnPhoto_OnClick);
-    btnPhoto.SetVisibility(false);
-    lay.AddChild(btnPhoto);
-    
-    app.AddLayout(lay);
-    
-    function btnConnect_OnClick() {
-        status.SetText("Connecting...");
-        socket = app.CreateTCPClient();
-        socket.SetOnConnect(socket_OnConnect);
-        socket.SetOnError(socket_OnError);
-        socket.Connect(ip, port);
-    }
-    
-    function socket_OnConnect() {
-        status.SetText("Connected!");
-        btnConnect.SetVisibility(false);
-        btnStream.SetVisibility(true);
-        btnStop.SetVisibility(true);
-        btnPhoto.SetVisibility(true);
-        
-        // Send device info
-        var info = "INFO:" + app.GetDeviceInfo();
-        socket.Write(info + "\\n");
-    }
-    
-    function socket_OnError(error) {
-        status.SetText("Error: " + error);
-    }
-    
-    function btnStream_OnClick() {
-        socket.Write("START_CAMERA\\n");
-        status.SetText("Starting camera...");
-    }
-    
-    function btnStop_OnClick() {
-        socket.Write("STOP_CAMERA\\n");
-        status.SetText("Stopping camera...");
-    }
-    
-    function btnPhoto_OnClick() {
-        socket.Write("TAKE_PHOTO\\n");
-        status.SetText("Taking photo...");
-    }
-}
-EOF
-
-    echo -e "${GREEN}✓ DroidScript code created on Desktop: droidscript_app.js${NC}"
-    echo ""
-    echo -e "${YELLOW}TO BUILD APK:${NC}"
-    echo "1. Install DroidScript from Play Store on your phone"
-    echo "2. Open DroidScript"
-    echo "3. Create new project"
-    echo "4. Replace the code with the contents of droidscript_app.js"
-    echo "5. Click 'Build APK'"
-    echo ""
-    echo -e "${GREEN}The APK will be built directly on your phone!${NC}"
-}
-
-# =============================================
-# METHOD 4: CREATE SIMPLE PYTHON SERVER
-# =============================================
-
-create_python_server() {
-    clear
-    echo -e "${BLUE}=== CREATING PYTHON SERVER FOR APK ===${NC}\n"
-    
-    cat > "$DESKTOP/server.py" << EOF
-#!/usr/bin/env python3
-"""
-Simple server for Android Remote Access
-Run this on your computer to receive connections
-"""
-
-import socket
-import threading
-import time
-from datetime import datetime
-
-HOST = '0.0.0.0'
-PORT = $LISTENER_PORT
-
-def handle_client(conn, addr):
-    print(f"\n[+] Connection from {addr}")
-    
-    while True:
-        try:
-            data = conn.recv(1024)
-            if not data:
-                break
-            
-            message = data.decode().strip()
-            print(f"[{addr[0]}] {message}")
-            
-            # Send response
-            response = f"OK at {datetime.now()}"
-            conn.send(response.encode())
-            
-        except Exception as e:
-            print(f"Error: {e}")
-            break
-    
-    conn.close()
-    print(f"[-] Disconnected from {addr}")
-
-def main():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind((HOST, PORT))
-    server.listen(5)
-    
-    print(f"\n{'='*50}")
-    print(f"ANDROID REMOTE ACCESS SERVER")
-    print(f"{'='*50}")
-    print(f"Server IP: {HOST}")
-    print(f"Server Port: {PORT}")
-    print(f"Your computer IP: {get_local_ip()}")
-    print(f"{'='*50}\n")
-    
-    while True:
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
-        thread.daemon = True
-        thread.start()
-
-def get_local_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
-    except:
-        return "127.0.0.1"
-
-if __name__ == "__main__":
-    main()
-EOF
-
-    chmod +x "$DESKTOP/server.py"
-    
-    echo -e "${GREEN}✓ Python server created on Desktop: server.py${NC}"
-    echo ""
-    echo -e "${YELLOW}To run the server:${NC}"
-    echo "  python3 $DESKTOP/server.py"
-    echo ""
-    echo -e "${YELLOW}The APK you build will connect to:${NC}"
-    echo "  IP: $LISTENER_IP"
-    echo "  Port: $LISTENER_PORT"
-}
-
-# =============================================
-# SHOW FILES ON DESKTOP
-# =============================================
-
-show_files() {
-    clear
-    echo -e "${BLUE}=== FILES ON DESKTOP ===${NC}\n"
-    
-    if [ -d "$DESKTOP" ]; then
-        echo -e "${YELLOW}APK Related Files:${NC}"
-        ls -la "$DESKTOP" | grep -E "\.(apk|zip|html|js|py|txt)" || echo "  No APK files yet"
-        echo ""
-        echo -e "${YELLOW}Projects:${NC}"
-        ls -la "$DESKTOP" | grep -E "(Project|Remote)" || echo "  No projects yet"
+    # Check for nmap
+    if ! command -v nmap &> /dev/null; then
+        echo -e "${RED}[!] nmap not found. Some features may be limited${NC}"
+        echo -e "${YELLOW}Install with: sudo apt-get install nmap (Linux) or brew install nmap (Mac)${NC}"
     else
-        echo "Desktop folder not found"
+        echo -e "${GREEN}[✓] nmap found${NC}"
+    fi
+    
+    # Check for netcat
+    if ! command -v nc &> /dev/null; then
+        echo -e "${YELLOW}[!] netcat not found. Some features may be limited${NC}"
+    else
+        echo -e "${GREEN}[✓] netcat found${NC}"
+    fi
+    
+    # Check for hping3
+    if ! command -v hping3 &> /dev/null; then
+        echo -e "${YELLOW}[!] hping3 not found (SYN scan will be limited)${NC}"
+    else
+        echo -e "${GREEN}[✓] hping3 found${NC}"
     fi
     
     echo ""
-    read -p "Press Enter to continue..."
 }
 
-# =============================================
-# MAIN MENU
-# =============================================
+# Function to validate IP address
+validate_ip() {
+    local ip=$1
+    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        # Check each octet is between 0-255
+        IFS='.' read -r -a octets <<< "$ip"
+        for octet in "${octets[@]}"; do
+            if ((octet < 0 || octet > 255)); then
+                return 1
+            fi
+        done
+        return 0
+    else
+        return 1
+    fi
+}
 
+# FIXED: Function for TCP Connect scan
+tcp_connect_scan() {
+    echo -e "\n${CYAN}[*] Starting TCP Connect Scan on $TARGET${NC}"
+    echo -e "${CYAN}[*] Scanning ports $START_PORT to $END_PORT${NC}\n"
+    
+    local open_ports=()
+    local total_ports=$((END_PORT - START_PORT + 1))
+    local current=0
+    
+    for ((port=$START_PORT; port<=$END_PORT; port++)); do
+        # Progress indicator
+        current=$((current + 1))
+        percentage=$((current * 100 / total_ports))
+        echo -ne "${YELLOW}[*] Progress: $current/$total_ports ($percentage%) - Testing port $port...${NC}\r"
+        
+        # TCP connection attempt using /dev/tcp (bash built-in)
+        (echo >/dev/tcp/$TARGET/$port) 2>/dev/null &
+        local pid=$!
+        
+        # Wait with timeout
+        sleep $TIMEOUT
+        if kill -0 $pid 2>/dev/null; then
+            kill $pid 2>/dev/null
+            wait $pid 2>/dev/null
+        else
+            wait $pid 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "\n${GREEN}[+] Port $port is OPEN${NC}"
+                open_ports+=($port)
+            fi
+        fi
+    done
+    
+    echo -e "\n\n${GREEN}[✓] Scan Complete!${NC}"
+    if [ ${#open_ports[@]} -eq 0 ]; then
+        echo -e "${YELLOW}[!] No open ports found${NC}"
+    else
+        echo -e "${GREEN}[+] Open ports: ${open_ports[*]}${NC}"
+        
+        # Try to identify services on open ports
+        echo -e "\n${BLUE}[*] Attempting service identification...${NC}"
+        for port in "${open_ports[@]}"; do
+            service=$(grep -w "^$port/" /etc/services 2>/dev/null | head -1 | awk '{print $1}')
+            if [ -n "$service" ]; then
+                echo -e "${GREEN}[+] Port $port: $service${NC}"
+            else
+                echo -e "${YELLOW}[?] Port $port: Unknown service${NC}"
+            fi
+        done
+    fi
+}
+
+# FIXED: Function for SYN scan
+syn_scan() {
+    echo -e "\n${CYAN}[*] Starting SYN Stealth Scan on $TARGET${NC}"
+    echo -e "${CYAN}[*] This scan is less likely to be logged${NC}\n"
+    
+    if command -v hping3 &> /dev/null; then
+        echo -e "${BLUE}[*] Using hping3 for SYN scan...${NC}\n"
+        sudo hping3 -S -p $START_PORT-$END_PORT --scan known $TARGET 2>/dev/null
+    elif command -v nmap &> /dev/null; then
+        echo -e "${BLUE}[*] Using nmap for SYN scan...${NC}\n"
+        sudo nmap -sS -p $START_PORT-$END_PORT $TARGET
+    else
+        echo -e "${RED}[!] Neither hping3 nor nmap found for SYN scan.${NC}"
+        echo -e "${YELLOW}[*] Falling back to TCP Connect scan...${NC}\n"
+        tcp_connect_scan
+    fi
+}
+
+# FIXED: Function for UDP scan
+udp_scan() {
+    echo -e "\n${CYAN}[*] Starting UDP Scan on $TARGET${NC}"
+    echo -e "${YELLOW}[!] UDP scans can be slow and unreliable${NC}\n"
+    
+    if command -v nmap &> /dev/null; then
+        echo -e "${BLUE}[*] Using nmap for UDP scan (this may take a while)...${NC}\n"
+        sudo nmap -sU -p $START_PORT-$END_PORT $TARGET
+    else
+        echo -e "${RED}[!] nmap is required for UDP scans.${NC}"
+        echo -e "${YELLOW}[*] Please install nmap: sudo apt-get install nmap${NC}"
+    fi
+}
+
+# FIXED: Function for aggressive scan with nmap
+nmap_aggressive() {
+    echo -e "\n${CYAN}[*] Starting Nmap Aggressive Scan${NC}"
+    echo -e "${YELLOW}[!] This scan is very noisy and will be detected${NC}\n"
+    
+    if command -v nmap &> /dev/null; then
+        nmap -A -T4 $TARGET -p $START_PORT-$END_PORT
+    else
+        echo -e "${RED}[!] nmap is required for aggressive scans.${NC}"
+    fi
+}
+
+# FIXED: Function for bypass techniques scan
+bypass_scan() {
+    echo -e "\n${CYAN}[*] Starting Firewall/IDS Bypass Scan${NC}"
+    echo -e "${YELLOW}[!] Using decoys and fragmentation techniques${NC}\n"
+    
+    if ! command -v nmap &> /dev/null; then
+        echo -e "${RED}[!] nmap required for this scan${NC}"
+        return
+    fi
+    
+    echo -e "${BLUE}Select bypass technique:${NC}"
+    echo -e "${CYAN}[1]${NC} Packet Fragmentation (-f)"
+    echo -e "${CYAN}[2]${NC} Decoy Scan (-D RND:10)"
+    echo -e "${CYAN}[3]${NC} Randomize Port Order (--randomize-hosts)"
+    echo -e "${CYAN}[4]${NC} All Techniques Combined"
+    echo -e "${CYAN}[0]${NC} Back to Main Menu"
+    
+    echo -e "\n${YELLOW}Enter choice:${NC} "
+    read -r bypass_choice
+    
+    case $bypass_choice in
+        1)
+            echo -e "\n${BLUE}[*] Running fragmented packet scan...${NC}"
+            sudo nmap -f $TARGET -p $START_PORT-$END_PORT
+            ;;
+        2)
+            echo -e "\n${BLUE}[*] Running decoy scan with random IPs...${NC}"
+            sudo nmap -D RND:10 $TARGET -p $START_PORT-$END_PORT
+            ;;
+        3)
+            echo -e "\n${BLUE}[*] Running scan with randomized ports...${NC}"
+            sudo nmap --randomize-hosts -p $START_PORT-$END_PORT $TARGET
+            ;;
+        4)
+            echo -e "\n${BLUE}[*] Running all bypass techniques combined...${NC}"
+            sudo nmap -f -D RND:10 --randomize-hosts -p $START_PORT-$END_PORT $TARGET
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}[!] Invalid option${NC}"
+            ;;
+    esac
+}
+
+# FIXED: Function for service detection
+service_detect() {
+    echo -e "\n${CYAN}[*] Detecting services on common ports${NC}\n"
+    
+    if ! command -v nc &> /dev/null; then
+        echo -e "${RED}[!] netcat (nc) is required for service detection${NC}"
+        return
+    fi
+    
+    # Common ports to check
+    local common_ports=(21 22 23 25 53 80 110 111 135 139 143 443 445 993 995 1723 3306 3389 5900 8080)
+    
+    echo -e "${BLUE}[*] Checking common ports on $TARGET...${NC}\n"
+    
+    for port in "${common_ports[@]}"; do
+        echo -ne "${YELLOW}[*] Probing port $port...${NC}\r"
+        
+        # Check if port is open
+        if timeout 2 bash -c "echo >/dev/tcp/$TARGET/$port" 2>/dev/null; then
+            echo -e "${GREEN}[+] Port $port is OPEN - ${NC}"
+            
+            # Try to grab banner
+            banner=$(timeout 2 nc -vn $TARGET $port 2>&1 | head -3 | tr -d '\n' | cut -c1-50)
+            if [ -n "$banner" ] && [ "$banner" != " " ]; then
+                echo -e "${GREEN}    Banner: $banner${NC}"
+            else
+                # Guess service from port number
+                case $port in
+                    21) echo -e "${BLUE}    Service: FTP${NC}" ;;
+                    22) echo -e "${BLUE}    Service: SSH${NC}" ;;
+                    23) echo -e "${BLUE}    Service: Telnet${NC}" ;;
+                    25) echo -e "${BLUE}    Service: SMTP${NC}" ;;
+                    53) echo -e "${BLUE}    Service: DNS${NC}" ;;
+                    80) echo -e "${BLUE}    Service: HTTP${NC}" ;;
+                    110) echo -e "${BLUE}    Service: POP3${NC}" ;;
+                    111) echo -e "${BLUE}    Service: RPC${NC}" ;;
+                    135) echo -e "${BLUE}    Service: RPC${NC}" ;;
+                    139) echo -e "${BLUE}    Service: NetBIOS${NC}" ;;
+                    143) echo -e "${BLUE}    Service: IMAP${NC}" ;;
+                    443) echo -e "${BLUE}    Service: HTTPS${NC}" ;;
+                    445) echo -e "${BLUE}    Service: SMB${NC}" ;;
+                    993) echo -e "${BLUE}    Service: IMAPS${NC}" ;;
+                    995) echo -e "${BLUE}    Service: POP3S${NC}" ;;
+                    1723) echo -e "${BLUE}    Service: PPTP${NC}" ;;
+                    3306) echo -e "${BLUE}    Service: MySQL${NC}" ;;
+                    3389) echo -e "${BLUE}    Service: RDP${NC}" ;;
+                    5900) echo -e "${BLUE}    Service: VNC${NC}" ;;
+                    8080) echo -e "${BLUE}    Service: HTTP-Alt${NC}" ;;
+                    *) echo -e "${YELLOW}    Service: Unknown${NC}" ;;
+                esac
+            fi
+        fi
+    done
+    echo -e "\n${GREEN}[✓] Service detection complete${NC}"
+}
+
+# FIXED: Function to set custom port range
+set_port_range() {
+    echo -e "\n${CYAN}[*] Current port range: $START_PORT-$END_PORT${NC}"
+    echo -e "${YELLOW}Enter new port range (e.g., 1-1000):${NC} "
+    read -r range
+    
+    if [[ $range =~ ^[0-9]+-[0-9]+$ ]]; then
+        START_PORT=$(echo $range | cut -d'-' -f1)
+        END_PORT=$(echo $range | cut -d'-' -f2)
+        if [ $START_PORT -lt 1 ] || [ $END_PORT -gt 65535 ] || [ $START_PORT -gt $END_PORT ]; then
+            echo -e "${RED}[!] Invalid port range. Using default 1-1024.${NC}"
+            START_PORT=1
+            END_PORT=1024
+        else
+            echo -e "${GREEN}[✓] Port range set to $START_PORT-$END_PORT${NC}"
+        fi
+    else
+        echo -e "${RED}[!] Invalid format. Using previous range.${NC}"
+    fi
+}
+
+# FIXED: Function to set target
+set_target() {
+    echo -e "\n${CYAN}[*] Current target: $TARGET${NC}"
+    echo -e "${YELLOW}Enter target IP address:${NC} "
+    read -r new_target
+    
+    if validate_ip "$new_target"; then
+        TARGET=$new_target
+        echo -e "${GREEN}[✓] Target set to $TARGET${NC}"
+    else
+        echo -e "${RED}[!] Invalid IP address. Please try again.${NC}"
+    fi
+}
+
+# FIXED: Function to show current settings
+show_settings() {
+    echo -e "\n${CYAN}═════════════════ CURRENT SETTINGS ═════════════════${NC}"
+    echo -e "${WHITE}Target IP:${NC}        ${YELLOW}$TARGET${NC}"
+    echo -e "${WHITE}Port Range:${NC}        ${YELLOW}$START_PORT-$END_PORT${NC}"
+    echo -e "${WHITE}Timeout:${NC}           ${YELLOW}${TIMEOUT}s${NC}"
+    echo -e "${WHITE}Threads:${NC}           ${YELLOW}$THREADS${NC}"
+    
+    # Check tool availability
+    echo -e "\n${WHITE}Available Tools:${NC}"
+    command -v nmap &> /dev/null && echo -e "${GREEN}✓ nmap${NC}" || echo -e "${RED}✗ nmap${NC}"
+    command -v nc &> /dev/null && echo -e "${GREEN}✓ netcat${NC}" || echo -e "${RED}✗ netcat${NC}"
+    command -v hping3 &> /dev/null && echo -e "${GREEN}✓ hping3${NC}" || echo -e "${RED}✗ hping3${NC}"
+    
+    echo -e "${CYAN}════════════════════════════════════════════════════${NC}\n"
+}
+
+# FIXED: Function to show main menu
 show_menu() {
+    echo -e "\n${PURPLE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${WHITE}                      MAIN MENU${NC}"
+    echo -e "${PURPLE}═══════════════════════════════════════════════════════════${NC}\n"
+    
+    echo -e "${CYAN}[1]${NC} ${WHITE}Basic TCP Connect Scan${NC}        - Standard port scan"
+    echo -e "${CYAN}[2]${NC} ${WHITE}SYN Stealth Scan${NC}              - Half-open scanning"
+    echo -e "${CYAN}[3]${NC} ${WHITE}UDP Scan${NC}                       - Scan UDP ports"
+    echo -e "${CYAN}[4]${NC} ${WHITE}Aggressive Nmap Scan${NC}          - Full service detection"
+    echo -e "${CYAN}[5]${NC} ${WHITE}Bypass Techniques${NC}              - Firewall evasion methods"
+    echo -e "${CYAN}[6]${NC} ${WHITE}Service Detection${NC}              - Identify running services"
+    echo -e "${CYAN}[7]${NC} ${WHITE}Custom Port Range${NC}              - Set your own port range"
+    echo -e "${CYAN}[8]${NC} ${WHITE}Set Target IP${NC}                  - Change target address"
+    echo -e "${CYAN}[9]${NC} ${WHITE}Show Current Settings${NC}          - Display current config"
+    echo -e "${CYAN}[0]${NC} ${WHITE}Exit${NC}                           - Quit the scanner"
+    
+    echo -e "\n${PURPLE}═══════════════════════════════════════════════════════════${NC}"
+}
+
+# Main program loop
+main() {
+    show_banner
+    check_dependencies
+    
+    # Initial target setup
     while true; do
-        clear
-        echo -e "${BLUE}"
-        echo "╔════════════════════════════════════════════════════╗"
-        echo "║     ANDROID REMOTE ACCESS APK BUILDER             ║"
-        echo "║     Creates REAL APK files on your Desktop        ║"
-        echo "╚════════════════════════════════════════════════════╝"
-        echo -e "${NC}"
-        
-        echo -e "Current settings: IP: ${GREEN}$LISTENER_IP${NC} Port: ${GREEN}$LISTENER_PORT${NC}\n"
-        
-        echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-        echo -e "${CYAN}║           CHOOSE METHOD                ║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  1) Configure IP & Port             ${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  2) Android Studio Project (APK)    ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Creates full Android project  ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Build with Android Studio     ${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  3) Website Builder (APK)           ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Creates HTML file             ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Use appsgeyser.com to build   ${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  4) DroidScript (APK)               ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Creates JavaScript code       ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Build on phone with DroidScript${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  5) Python Server                   ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}     - Creates server for testing    ${CYAN}║${NC}"
-        echo -e "${CYAN}╠════════════════════════════════════════╣${NC}"
-        echo -e "${CYAN}║${NC}  6) Show files on Desktop           ${CYAN}║${NC}"
-        echo -e "${CYAN}║${NC}  7) Exit                            ${CYAN}║${NC}"
-        echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-        echo ""
-        read -p "Enter number [1-7]: " choice
+        echo -e "${YELLOW}Enter target IP address to scan:${NC} "
+        read -r TARGET
+        if validate_ip "$TARGET"; then
+            echo -e "${GREEN}[✓] Target set to $TARGET${NC}"
+            break
+        else
+            echo -e "${RED}[!] Invalid IP address. Please try again.${NC}"
+        fi
+    done
+    
+    # Main menu loop
+    while true; do
+        show_menu
+        echo -e "\n${YELLOW}Enter your choice [0-9]:${NC} "
+        read -r choice
         
         case $choice in
-            1) configure_settings ;;
-            2) build_android_studio_apk
+            1)
+                tcp_connect_scan
+                ;;
+            2)
+                syn_scan
+                ;;
+            3)
+                udp_scan
+                ;;
+            4)
+                nmap_aggressive
+                ;;
+            5)
+                bypass_scan
+                ;;
+            6)
+                service_detect
+                ;;
+            7)
+                set_port_range
+                ;;
+            8)
+                set_target
+                ;;
+            9)
+                show_settings
+                ;;
+            0)
+                echo -e "\n${GREEN}[✓] Thank you for using Toph41k Port Scanner!${NC}"
+                echo -e "${YELLOW}Remember: Always scan responsibly!${NC}\n"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}[!] Invalid option. Please choose 0-9.${NC}"
+                sleep 2
+                ;;
+        esac
+        
+        echo -e "\n${PURPLE}Press Enter to continue...${NC}"
+        read -r
+    done
+}
+
+# Run the main function
+main
